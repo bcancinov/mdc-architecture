@@ -1,0 +1,7 @@
+flowchart LR
+    RelayDrive["Registered FPGA relay_drive"] --> ARM["ARM input"]
+    EN["EN"] --> ResetLogic["RESET = NOT(EN) OR NOT(OK)"]
+    OK["OK"] --> ResetLogic
+    ARM --> Latch["Reset-dominant latch / flip-flop"]
+    ResetLogic --> Latch
+    Latch --> Coil["Q<br/>sole relay coil driver"]

@@ -1,0 +1,11 @@
+flowchart LR
+    Interlocks["Hardware interlocks<br/>make the system safe"]
+    FSM["FPGA FSM<br/>makes safety deterministic"]
+    Ethernet["Ethernet<br/>coordinates operation and explains faults"]
+    UART["UART<br/>rescues the system when Ethernet cannot"]
+    Timing["CLOCK and SYNC<br/>create shared timing reality"]
+
+    Interlocks --> FSM
+    FSM --> Ethernet
+    UART -. "fallback path" .-> Ethernet
+    Timing --> FSM

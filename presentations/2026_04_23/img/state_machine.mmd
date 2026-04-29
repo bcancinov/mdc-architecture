@@ -1,0 +1,9 @@
+stateDiagram-v2
+    direction LR
+    START --> IDLE: qualified stable
+    IDLE --> RUN: arm
+    RUN --> IDLE: disarm
+    IDLE --> ERROR: fault
+    RUN --> ERROR: fault
+    ERROR --> START: clear succeeds
+    START --> ERROR: local fault or timeout

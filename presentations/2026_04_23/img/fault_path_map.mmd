@@ -1,0 +1,11 @@
+flowchart LR
+    F1["Physical discontinuity"] --> Loop["Continuity loop breaks"]
+    Loop --> LoopIn["Main sees LOOP_IN low"]
+    LoopIn --> MainOK["Main pulls OK low"]
+    MainOK --> Error["All boards enter ERROR"]
+
+    F2["Electronic / timing / supervision fault"] --> LocalOK["Local board pulls OK low"]
+    LocalOK --> Error
+
+    F6["Full 12V loss<br/>connector intact"] --> Relay["Relay de-energizes mechanically"]
+    F6 --> EthTimeout["Ethernet timeout diagnoses later"]

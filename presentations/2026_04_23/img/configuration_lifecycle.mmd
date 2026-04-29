@@ -1,0 +1,9 @@
+flowchart LR
+    Commission["Commissioning<br/>UART writes IP, port,<br/>board type, MAC"]
+    Boot["Boot<br/>Board reads all NVM<br/>in START.boot"]
+    Operation["Operation<br/>Host talks directly<br/>over Ethernet"]
+    Reconfig["Reconfiguration<br/>UART fallback for<br/>bootstrap identity"]
+
+    Commission --> Boot --> Operation
+    Operation -. "service / replacement" .-> Reconfig
+    Reconfig --> Boot
