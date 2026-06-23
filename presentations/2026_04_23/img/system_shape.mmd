@@ -1,9 +1,0 @@
-flowchart LR
-    Host["Host network"]
-
-    Main["Main board<br/>PLC gateway<br/>EN, CLEAR, SYNC coordinator<br/>CLOCK source and loop monitor"]
-    FB["Function boards<br/>Sequencer logic<br/>Detector-facing outputs<br/>ADC sampling"]
-
-    Host --> Main
-    Host --> FB
-    Main -- "Backplane control<br/>CLOCK / SYNC / EN / CLEAR / OK / LOOP" --> FB

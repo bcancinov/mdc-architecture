@@ -1,9 +1,0 @@
-flowchart LR
-    Clock["100 MHz CLOCK"] --> Sequencer["Sequencer timing"]
-    Clock --> Div50["Divide by 50"]
-    Div50 --> Base["2 MHz baseline"]
-    Base --> DivN["Divide by N"]
-    Base --> DivM["Divide by M"]
-    DivN --> DCDC["DC-DC switching clock"]
-    DivM --> Watchdog["Watchdog sample clock"]
-    Sync["IDLE SYNC rising edge"] -. "resets dividers" .-> Div50
