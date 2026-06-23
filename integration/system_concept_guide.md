@@ -1,7 +1,7 @@
 # Modular Detector Controller Concept Guide
 
 - **Status:** Draft / Non-normative
-- **Last updated:** 2026-05-04
+- **Last updated:** 2026-06-23
 
 This guide explains the modular detector controller from first principles. It is intended for readers who need to understand the system before reading the detailed ADRs, ICDs, firmware design specs, or hardware design specs.
 
@@ -41,7 +41,7 @@ Some words in the ADRs are precise but easy to misread at first. This guide uses
 | **Disarm** | Return from armed operation to safe operation by dropping `EN = 0`. Function boards must de-arm immediately. |
 | **Run** | The armed state family where acquisition can occur. `RUN` includes preparation, waiting for trigger/sync, active acquisition, stopping, and disarm cleanup. |
 | **Fault** | A hardware or safety-relevant condition that requires immediate transition to the safe error path. Faults propagate through `OK = 0`. |
-| **Not Ready** | A condition that blocks arming but is not itself a fault while `EN = 0`. Example: DC-DC phase has not settled after pre-arm `SYNC`. |
+| **Not Ready** | A condition that blocks arming but is not itself a fault while `EN = 0`. Example: local synchronization readiness has not completed after pre-arm `SYNC` on a board that needs it. |
 | **Trip** | The act of pulling `OK` LOW or otherwise forcing the system into the safe error path. |
 | **Recover / clear** | The explicit operator or host action that asks boards to recheck fault conditions and, if clean, return through `START.wait`. |
 
@@ -54,7 +54,9 @@ The most important distinction is **Not Ready vs Fault**:
 
 ## 3. The System in One Paragraph
 
-The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, and loop monitoring. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet and uses UART only for bootstrap configuration or fallback diagnostics.
+The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and optional utility converter synchronization. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet and uses UART only for bootstrap configuration or fallback diagnostics.
+
+The backplane also distributes common **utility voltages** (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most function boards do not need to generate the same common rails locally. `+12V_RAW` is still distributed for specialized board-local rails, such as detector high voltages.
 
 The architecture is designed around one safety rule:
 
@@ -72,7 +74,7 @@ The system is easier to understand if you separate three layers:
 flowchart TB
     HOST["Remote Host\nEthernet orchestration, topology,\nsequencer upload, diagnostics"]
     MAIN["Main Board\nEN, CLEAR, CLOCK, SYNC,\nLOOP monitoring"]
-    BACKPLANE["Backplane\nShared safety/control signals\nPoint-to-point CLOCK/SYNC"]
+    BACKPLANE["Backplane\nShared safety/control signals\nPoint-to-point CLOCK/SYNC\nUtility voltages"]
     FB1["Function Board\nVideo / Bias / Clock / Bridge"]
     FBN["Function Board\nDetector-specific role"]
     DET["Detector-facing hardware\nRelays, bias, clocks, ADC control"]
@@ -81,9 +83,9 @@ flowchart TB
     HOST -- "Ethernet commands / telemetry" --> FB1
     HOST -- "Ethernet commands / telemetry" --> FBN
     MAIN -- "EN, CLEAR, LOOP, OK pull-up" --> BACKPLANE
-    MAIN -- "CLOCK, SYNC" --> BACKPLANE
-    BACKPLANE -- "Shared safety/control" --> FB1
-    BACKPLANE -- "Shared safety/control" --> FBN
+    MAIN -- "CLOCK, SYNC\noptional utility DC-DC sync" --> BACKPLANE
+    BACKPLANE -- "Shared safety/control\nutility power" --> FB1
+    BACKPLANE -- "Shared safety/control\nutility power" --> FBN
     FB1 --> DET
     FBN --> DET
 ```
@@ -100,7 +102,7 @@ There are four ideas that make the rest of the documents easier to read:
    Software and Ethernet are useful for diagnostics, but the immediate trip path is hardware: the `OK` bus, continuity loop, watchdogs, fail-safe drivers, and relay reset logic.
 
 2. **The main board coordinates but does not acquire science data.**  
-   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, and monitors global health. It has no sequencer.
+   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, monitors global health, and provides the optional sync reference for backplane utility DC-DC converters. It has no sequencer.
 
 3. **Function boards enforce their own readiness.**  
    The host should verify readiness before arming, but each function board still checks locally when `EN` rises. If a required condition is missing, that board trips the system.
@@ -116,9 +118,9 @@ Conceptually, the system has these pieces:
 
 | Piece | Role |
 |---|---|
-| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`. |
+| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides optional utility DC-DC sync reference. |
 | Function boards | Detector-specific boards such as video, bias, clock, or bridge boards. They run sequencers, drive outputs, monitor local faults, and enforce arm readiness. |
-| Backplane | Carries shared safety/control signals and point-to-point clock/sync distribution. |
+| Backplane | Carries shared safety/control signals, point-to-point clock/sync distribution, `+12V_RAW`, and common utility voltages. |
 | Remote host | Owns topology, sends Ethernet commands, uploads sequencers, performs hash attestation, polls diagnostics, and initiates recovery. |
 | UART port | Per-board bootstrap and fallback path. Used when Ethernet is not configured or unavailable. |
 
@@ -163,6 +165,15 @@ These are the system-level signals that appear throughout the ADRs.
 | `LOOP_OUT` / `LOOP_IN` | Physical continuity loop | A passive loop through slots and cables. If the loop breaks, the main board converts that into an `OK` fault. |
 
 The detailed behavioral source of truth for these signals is ADR-003.
+
+The common backplane utility voltages are not state-machine signals. They are power resources defined in ADR-005:
+
+| Power resource | Plain meaning |
+|---|---|
+| `+3.3V_DIG` | Common digital utility rail for logic and management loads only. |
+| `+6V_ANA` / `-6V_ANA` | Common low-voltage analog utility rails. |
+| `+16V_ANA` / `-16V_ANA` | Common analog utility rails. |
+| `+12V_RAW` | Distributed raw/input rail for specialized board-local converters and independent safety support paths. |
 
 ---
 
@@ -240,7 +251,7 @@ If those checks do not pass within the defined deadlines, the board enters `ERRO
 Before every arm, the host should:
 
 1. Send pre-arm `SYNC` through the main board.
-2. Wait for DC-DC phase-settle readiness.
+2. Wait for `local_sync_ready` on boards that require local synchronization readiness.
 3. Attest sequencer hashes on required function boards.
 4. Confirm function-board readiness.
 5. Send `arm` to the main board.
@@ -316,7 +327,7 @@ Examples:
 | Situation | Conceptual result |
 |---|---|
 | A board detects over-current, over-temperature, PLL loss, or another local internal fault | That board pulls `OK` LOW. |
-| A board FPGA loses power or reset collapses | Fail-safe hardware pulls `OK` LOW if local 12V is still present. |
+| A board FPGA loses power or reset collapses | Fail-safe hardware pulls `OK` LOW if the independent watchdog/fail-safe supply is still present. |
 | A board logic path freezes | External watchdog eventually pulls `OK` LOW. |
 | A cable or slot continuity path breaks | Main board detects `LOOP_IN` drop and pulls `OK` LOW. |
 | Host keep_alive stops while armed | The timed-out board pulls `OK` LOW as a supervisory interlock event. |
@@ -397,8 +408,10 @@ This avoids requiring every function board to multiply a low-frequency reference
 
 `SYNC` has two conceptual uses:
 
-1. In `IDLE`, `SYNC` resets divider phase before arming. This aligns DC-DC switching behavior across boards before sensitive operation begins.
+1. In `IDLE`, `SYNC` resets watchdog timing dividers and any implemented synchronized local converter divider before arming.
 2. In `RUN`, `SYNC` starts and stops acquisition windows.
+
+Common utility-voltage converters live in the backplane/common-power domain. Their synchronization is preferred but optional; when used, the main board provides the sync reference. Specialized board-local converters may also choose to synchronize to the timing family, but that is board-specific.
 
 Function boards also have an independent local management clock. The FSM, safety outputs, fault monitors, and diagnostics must not depend on the distributed 100 MHz `CLOCK`, because a lost distributed clock is itself a fault that must be detected.
 
@@ -410,7 +423,7 @@ Each board has two important timing families.
 
 | Clock family | What it is for |
 |---|---|
-| Distributed 100 MHz `CLOCK` | Sequencer timing, timing-critical outputs, DC-DC divider baseline, watchdog timing-domain sample path. |
+| Distributed 100 MHz `CLOCK` | Sequencer timing, timing-critical outputs, watchdog timing-domain sample path, and optional synchronized local-converter divider baseline. |
 | Local management clock | Safety FSM, registered safety outputs, fault monitoring, diagnostics, Ethernet/UART management logic. |
 
 The management clock must be independent of the distributed `CLOCK`. Otherwise, if the distributed `CLOCK` disappeared, the logic responsible for detecting that disappearance could stop too.
@@ -447,7 +460,8 @@ Use this guide to understand the system shape, then use the detailed documents f
 | Fault taxonomy, `OK` bus behavior, watchdogs, fail-safe paths | `decisions/ADR-001_presence_health_detection.md` |
 | UART/NVM/Ethernet configuration model, topology ownership, sequencer hash attestation | `decisions/ADR-002_backplane_configuration_identification.md` |
 | FSM states, signal semantics, transition guards, timing constants, relay logic | `decisions/ADR-003_state_machine_definition.md` |
-| 100 MHz clock distribution, SYNC behavior, DC-DC divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
+| 100 MHz clock distribution, SYNC behavior, optional local-converter divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
+| Backplane utility voltages, `+12V_RAW`, optional utility DC-DC synchronization | `decisions/ADR-005_backplane_utility_voltages.md` |
 | Message schemas, electrical pinouts, command sequences | Future `interfaces/` ICDs |
 | RTL, schematics, pseudocode, component choices | Future `design/` specs |
 | Worked examples and bring-up procedures | Future `integration/` guides |
@@ -472,5 +486,5 @@ These terms are useful when moving from this guide into the ADRs.
 | `WD_latch` | Diagnostic observer latch showing that the external watchdog tripped. |
 | Local management clock | Independent board-local clock used for safety FSM, fault detection, and management logic. |
 | Distributed `CLOCK` | Main-board 100 MHz timing clock sent to function boards for sequencer and timing-derived functions. |
-| `dcdc_sync_ready` | Local readiness flag set after IDLE pre-arm `SYNC` and settle time. |
+| `local_sync_ready` | Local readiness flag set after IDLE pre-arm `SYNC` and settle time on boards that require local synchronization readiness. |
 | `sequencer_hash_valid_current_arm` | One-arm-use readiness token set by successful sequencer hash attestation in `IDLE`. |
