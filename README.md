@@ -27,7 +27,7 @@ specifications/
 │   └── reference/             ← Long normative/reference tables and diagrams split out of ADRs
 ├── interfaces/                ← ICDs: protocols, message formats, electrical details  [planned]
 ├── design/                    ← Firmware and hardware design specs                    [planned]
-└── integration/               ← System integration guide, worked examples             [planned]
+└── integration/               ← Concept guide, system integration guide, worked examples
 ```
 
 | Folder / Document Type | Purpose (What lives here) | Examples | When to look here |
@@ -35,9 +35,11 @@ specifications/
 | **`decisions/`** <br><br> **ADR** (Architecture Decision Record) | *What must be true and why.* <br><br>Architectural constraints, invariants, rationale, and rejected alternatives. Long tables/diagrams may live in `decisions/reference/` to keep ADRs reviewable. | Fault taxonomy, FSM states and transition guards, timing constants, safety-path rules (four OK sources, registered outputs), relay stage normative requirements. | When you need to know a system rule, understand why a design choice was made, or verify whether a proposed change violates an architectural constraint. |
 | **`interfaces/`** <br><br> **ICD** (Interface Control Document) | *What crosses a boundary.* <br><br>Protocols, message formats, electrical interface details, and host-side orchestration sequences. | Ethernet command schemas, keep_alive format/cadence, UART command set, F4 verification host-side sequence, sequencer payload framing, backplane pinout/voltage levels. | When you are implementing host software, writing board firmware that handles external commands, or designing a backplane connector. |
 | **`design/`** <br><br> **FDS / HDS** (Firmware & Hardware Design Specs) | *How internal implementation satisfies the ADR constraints.* <br><br>Reference code, pseudocode, schematics, and component selections. | START.wait qualification loop, ERROR.clear evaluator, FSM integration modules, D flip-flop relay stage wiring, wired-AND RESET_n generator, fail-safe buffer circuits. | When you are writing FPGA RTL, laying out a board schematic, or selecting components for a specific function board. |
-| **`integration/`** <br><br> **System Integration Guide** | *How the system behaves as a whole during operation.* <br><br>Worked examples, fault lifecycle walkthroughs, onboarding tutorials. | Fault-trip and ERROR.clear recovery lifecycle narrative, multi-board power-up sequencing example. | When you are bringing up a new system, training a new team member, or debugging a cross-board interaction. |
+| **`integration/`** <br><br> **Concept Guide / System Integration Guide** | *How the system behaves as a whole during operation.* <br><br>Reader-friendly concept explanations, worked examples, fault lifecycle walkthroughs, onboarding tutorials. | `system_concept_guide.md`, fault-trip and ERROR.clear recovery lifecycle narrative, multi-board power-up sequencing example. | Start here when the ADRs are too dense, when bringing up a new system, training a new team member, or debugging a cross-board interaction. |
 
 **Rule of thumb:** If it says *"the board must..."* or *"this is prohibited because..."*, it belongs in an ADR in `decisions/`. If it says *"send command X, wait Y ms, read pin Z"*, it belongs in an ICD in `interfaces/`. If it says *"wire D=VCC, CLK=relay_drive"* or *"always @(posedge clk) begin..."*, it belongs in a design spec in `design/`.
+
+**Recommended reading path for new readers:** Start with [`integration/system_concept_guide.md`](integration/system_concept_guide.md), then use this README as the map into the ADRs and future ICD/design documents.
 
 ---
 
@@ -85,4 +87,3 @@ stateDiagram-v2
     
     ERROR.clear --> START.wait : clear succeeds
 ```
-
