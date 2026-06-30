@@ -1,7 +1,7 @@
 ﻿# ADR-003: Hierarchical State Machine Definition
 
 **Status:** Resolved
-**Last updated:** 2026-04-09
+**Last updated:** 2026-06-30
 
 ---
 
@@ -26,9 +26,9 @@ The main board is a PLC gateway. Its FSM responsibilities are strictly limited t
 | Arm / disarm the system | Drives EN on the backplane |
 | Generate and distribute clock and sync | Generates CLOCK and SYNC LVDS signals and distributes them point-to-point to all backplane slots |
 | Monitor errors and recovery | Monitors OK bus and LOOP_IN, drives CLEAR |
-| Provide utility converter sync reference when implemented | Drives the ICD-defined backplane utility DC-DC sync reference per ADR-005 |
+| Provide utility converter synchronization capability | Drives five independently phase-capable, point-to-point LVDS utility DC-DC sync outputs per ADR-005; converter use and phase offset remain instrument options |
 
-The main board has no sequencer and no FSM coordination outputs beyond `EN`/`CLEAR`/`SYNC`. Infrastructure outputs (`CLOCK`, `LOOP_OUT`, and optional utility-converter sync) are also main-board signals and are defined here or in ADR-005. Other control functions (shutter, timing outputs, auxiliary signals) belong to function boards and are intentionally outside this ADR's scope; board-specific behavior for those outputs must be defined in function-board ICDs and future ADRs. Adding sequencer logic to main is explicitly out of scope.
+The main board has no sequencer and no FSM coordination outputs beyond `EN`/`CLEAR`/`SYNC`. Infrastructure outputs (`CLOCK`, `LOOP_OUT`, and the mandatory utility-converter sync capability) are also main-board signals and are defined here or in ADR-005. Whether a common-power implementation consumes those utility-sync outputs and applies phase offsets remains optional. Other control functions (shutter, timing outputs, auxiliary signals) belong to function boards and are intentionally outside this ADR's scope; board-specific behavior for those outputs must be defined in function-board ICDs and future ADRs. Adding sequencer logic to main is explicitly out of scope.
 
 ### R2: Core philosophy
 
@@ -103,7 +103,7 @@ This table is the authoritative behavioral definition for backplane signals. Oth
 | `CLOCK` | Main-board clock generator/driver (outside FPGA) | Point-to-point LVDS | Level (continuous) | High-frequency sequencer clock (100 MHz), distributed point-to-point LVDS per slot. Used directly by function boards without PLL multiplication. In `START.wait`, function boards must observe watchdog pet-source activity derived from distributed `CLOCK`, and main must observe activity from its external clock-source monitor, both within `T_clock_present_max = 1 s` (timeout path). After `START.wait` completes, missing/invalid distributed `CLOCK` or failure in the `CLOCK -> divider -> pet` path is classified as F5 (CLOCK/pet-path fault) and propagates through the existing interlock fault path. See ADR-004. |
 | `SYNC` | Main FPGA | Point-to-point LVDS | Edge + state-qualified | Point-to-point LVDS per slot. Generated with fixed 180° phase offset relative to `CLOCK` (`SYNC` rising aligned to `CLOCK` falling) to avoid uncertain cycle capture. `IDLE` + rising edge (`EN=0`) → reset watchdog divider phase and any implemented synchronized local DC-DC divider phase (pre-arm sync). `RUN.wait` + rising edge → RUN.run (start acquisition). `RUN.run` + falling edge → RUN.stop (graceful stop). Main must enforce minimum SYNC HIGH/LOW dwell `T_sync_min` (R6) for IDLE pre-arm and RUN pulses to guarantee capture in all function-board management domains. SYNC edges during `START.*` and `ERROR.*` are ignored by all boards. |
 
-Utility voltages (`+3.3V_DIG`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, `-16V_ANA`) and the optional main-board utility DC-DC sync reference are power-infrastructure resources, not FSM state signals. Their generation, naming, connector allocation, and optional synchronization are defined by ADR-005 and the relevant ICD/design package.
+Utility voltages (`+3.3V_DIG`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, `-16V_ANA`) and the main-board `UTILITY_DCDC_SYNC[0..4]` outputs are power-infrastructure resources, not FSM state signals. Their generation, naming, connector allocation, optional converter use, and optional phase plan are defined by ADR-005 and the relevant ICD/design package.
 
 #### Signal flow diagram
 
@@ -436,7 +436,7 @@ System is armed while `EN=1` (`RUN.init`/`RUN.wait`/`RUN.run`/`RUN.stop`). In `R
 |---|---|---|
 | RUN.init | EN rising accepted by local EN-rise qualifier (function boards use `N_en_rise_debounce`; main enters on accepted arm command) | Arm-entry initialization: flush ADCs, apply bias voltages, pre-load sequencers, reset counters. (Watchdog divider reset, and local DC-DC phase reset where implemented, is performed earlier in IDLE; see ADR-004 R4.) |
 | RUN.wait | RUN.init complete | Hardware ready, monitoring SYNC continuously |
-| RUN.run | SYNC rising edge | Sequencers fire and data acquisition begins. Boards with synchronized local converters have already established their phase relationship during IDLE pre-arm SYNC; utility-converter synchronization, when used, is handled by the main-board reference defined in ADR-005. |
+| RUN.run | SYNC rising edge | Sequencers fire and data acquisition begins. Boards with synchronized local converters have already established their phase relationship during IDLE pre-arm SYNC; backplane utility-converter synchronization, when used, is handled by the main-board `UTILITY_DCDC_SYNC[0..4]` outputs defined in ADR-005. |
 | RUN.stop | SYNC falling edge | Graceful stop: halt capture, bleed integration capacitors, zero counters → return to RUN.wait |
 | RUN.disarm | disarm command (main) / backplane `EN` falling edge (function, any `RUN.*`, no debounce) | Forced disarm path: relays open immediately via `EN=0` hardware reset path; run deterministic one-cycle bookkeeping, then transition to IDLE |
 

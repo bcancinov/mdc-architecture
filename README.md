@@ -8,11 +8,18 @@ To avoid documentation drift, **this README is a primer and map**, not the norma
 
 ## Changelog
 
+### 2026-06-30 — Utility converter frequency, synchronization, and module filtering
+
+- Fixed backplane utility converters at a nominal 2 MHz continuous switching frequency during acquisition and prohibited burst, pulse-skipping, foldback, and spread-spectrum modes during acquisition.
+- Required the main board and its connector to provide five independent, phase-configurable, point-to-point LVDS utility-converter sync outputs; converter use and phase interleaving remain instrument options.
+- Required noise-sensitive modules to filter analog utility rails locally immediately after the backplane connector and before low-noise regulation.
+- Defined analog/digital connector zoning and intentional return allocation without mandating separate physical connector bodies.
+
 ### 2026-06-23 — Backplane utility voltages
 
 - Added ADR-005 to define common backplane utility voltages: `+3.3V_DIG`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, and `-16V_ANA`.
 - Kept `+12V_RAW` distributed to modular boards for specialized local rails such as detector high voltages.
-- Defined utility-voltage DC-DC synchronization as preferred but optional, with the main board acting as the sync authority when implemented.
+- Defined utility-voltage DC-DC synchronization as preferred but optional, with the main board acting as the sync authority when implemented (superseded by the mandatory interface capability defined on 2026-06-30).
 - Updated ADR-001, ADR-003, and ADR-004 to separate utility-power distribution from sequencer timing, board-local special converters, and safety watchdog/fail-safe supply independence.
 - Renamed the pre-arm synchronization readiness flag to `local_sync_ready` so it is not tied only to DC-DC converter synchronization.
 - Split long transition tables, topology examples, and supporting diagrams into `decisions/reference/` to make the ADRs easier to peer review.
@@ -50,7 +57,7 @@ The system is a multi-board, backplane-based controller divided into two distinc
 * **The Main Board:** Acts as a PLC gateway and system coordinator. It distributes the master `CLOCK` and `SYNC`, manages the continuity loop, and drives the global `EN` (arm) and `CLEAR` (recovery) signals. *Crucially, the main board has no sequencer and does not run scientific acquisitions itself.*
 * **The Function Boards:** (Video, Bias, Clock, etc.) These boards execute the actual sequencer logic, drive detector pins, and sample the ADCs. 
 
-The backplane also distributes common utility voltages (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most modular boards do not duplicate the same local DC-DC converters. `+12V_RAW` remains available for boards that need specialized local rails such as high detector voltages. When utility DC-DC synchronization is implemented, the main board provides the sync reference; this is preferred but optional pending EMC/noise validation (ADR-005).
+The backplane also distributes common utility voltages (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most modular boards do not duplicate the same local DC-DC converters. `+12V_RAW` remains available for boards that need specialized local rails such as high detector voltages. Utility converters operate at a nominal fixed 2 MHz during acquisition. The main board reserves five independently phase-capable LVDS synchronization outputs; instruments may choose whether to use synchronization and phase interleaving. Noise-sensitive function boards locally filter analog utility rails immediately after the connector and before low-noise regulation (ADR-005).
 
 ### Core Design Philosophy
 > **"Go to safe state fast. Go to not-safe state slow."**

@@ -1,7 +1,7 @@
 # Modular Detector Controller Concept Guide
 
 - **Status:** Draft / Non-normative
-- **Last updated:** 2026-06-23
+- **Last updated:** 2026-06-30
 
 This guide explains the modular detector controller from first principles. It is intended for readers who need to understand the system before reading the detailed ADRs, ICDs, firmware design specs, or hardware design specs.
 
@@ -54,7 +54,7 @@ The most important distinction is **Not Ready vs Fault**:
 
 ## 3. The System in One Paragraph
 
-The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and optional utility converter synchronization. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet and uses UART only for bootstrap configuration or fallback diagnostics.
+The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and utility-converter synchronization capability. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet and uses UART only for bootstrap configuration or fallback diagnostics.
 
 The backplane also distributes common **utility voltages** (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most function boards do not need to generate the same common rails locally. `+12V_RAW` is still distributed for specialized board-local rails, such as detector high voltages.
 
@@ -83,7 +83,7 @@ flowchart TB
     HOST -- "Ethernet commands / telemetry" --> FB1
     HOST -- "Ethernet commands / telemetry" --> FBN
     MAIN -- "EN, CLEAR, LOOP, OK pull-up" --> BACKPLANE
-    MAIN -- "CLOCK, SYNC\noptional utility DC-DC sync" --> BACKPLANE
+    MAIN -- "CLOCK, SYNC\nutility DC-DC sync capability" --> BACKPLANE
     BACKPLANE -- "Shared safety/control\nutility power" --> FB1
     BACKPLANE -- "Shared safety/control\nutility power" --> FBN
     FB1 --> DET
@@ -102,7 +102,7 @@ There are four ideas that make the rest of the documents easier to read:
    Software and Ethernet are useful for diagnostics, but the immediate trip path is hardware: the `OK` bus, continuity loop, watchdogs, fail-safe drivers, and relay reset logic.
 
 2. **The main board coordinates but does not acquire science data.**  
-   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, monitors global health, and provides the optional sync reference for backplane utility DC-DC converters. It has no sequencer.
+   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, monitors global health, and provides five phase-capable LVDS sync outputs for backplane utility DC-DC converters. Converter use of those outputs is optional. The main board has no sequencer.
 
 3. **Function boards enforce their own readiness.**  
    The host should verify readiness before arming, but each function board still checks locally when `EN` rises. If a required condition is missing, that board trips the system.
@@ -118,7 +118,7 @@ Conceptually, the system has these pieces:
 
 | Piece | Role |
 |---|---|
-| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides optional utility DC-DC sync reference. |
+| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides five phase-capable LVDS utility DC-DC sync outputs whose use is instrument-selectable. |
 | Function boards | Detector-specific boards such as video, bias, clock, or bridge boards. They run sequencers, drive outputs, monitor local faults, and enforce arm readiness. |
 | Backplane | Carries shared safety/control signals, point-to-point clock/sync distribution, `+12V_RAW`, and common utility voltages. |
 | Remote host | Owns topology, sends Ethernet commands, uploads sequencers, performs hash attestation, polls diagnostics, and initiates recovery. |
@@ -411,7 +411,13 @@ This avoids requiring every function board to multiply a low-frequency reference
 1. In `IDLE`, `SYNC` resets watchdog timing dividers and any implemented synchronized local converter divider before arming.
 2. In `RUN`, `SYNC` starts and stops acquisition windows.
 
-Common utility-voltage converters live in the backplane/common-power domain. Their synchronization is preferred but optional; when used, the main board provides the sync reference. Specialized board-local converters may also choose to synchronize to the timing family, but that is board-specific.
+Common utility-voltage converters live in the backplane/common-power domain and operate at a nominal fixed 2 MHz during acquisition. The main board provides five independently phase-capable, point-to-point LVDS utility-sync outputs so an instrument may synchronize and optionally phase-interleave its converter channels. The connector and timing capability are always present; use of synchronization and the phase plan are instrument choices.
+
+Noise-sensitive function boards filter each consumed analog utility rail locally, inside the module immediately after the backplane connector and before the low-noise LDO or analog point-of-load regulator. A damped C-L-C network is the normal implementation, with attenuation, component values, damping, inrush, and dropout verified by the board ICD/design specification. This local filter supplements rather than replaces the common-power rail's own ripple and conducted-noise compliance.
+
+The backplane connector may be one mechanical assembly, but analog-power contacts and their returns occupy a physically segregated zone from digital power, fast digital signals, and the utility-sync LVDS pairs. Dedicated return contacts define controlled current paths and grounded boundaries; exact pin allocation remains an electrical ICD item.
+
+Specialized board-local converters may also choose to synchronize to the timing family, but that is board-specific. When they do, their switching frequency remains an exact integer divisor of the function board's 2 MHz baseline as defined by ADR-004.
 
 Function boards also have an independent local management clock. The FSM, safety outputs, fault monitors, and diagnostics must not depend on the distributed 100 MHz `CLOCK`, because a lost distributed clock is itself a fault that must be detected.
 
@@ -461,7 +467,7 @@ Use this guide to understand the system shape, then use the detailed documents f
 | UART/NVM/Ethernet configuration model, topology ownership, sequencer hash attestation | `decisions/ADR-002_backplane_configuration_identification.md` |
 | FSM states, signal semantics, transition guards, timing constants, relay logic | `decisions/ADR-003_state_machine_definition.md` |
 | 100 MHz clock distribution, SYNC behavior, optional local-converter divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
-| Backplane utility voltages, `+12V_RAW`, optional utility DC-DC synchronization | `decisions/ADR-005_backplane_utility_voltages.md` |
+| Backplane utility voltages, `+12V_RAW`, 2 MHz utility switching, sync capability, module filtering, and connector zoning | `decisions/ADR-005_backplane_utility_voltages.md` |
 | Message schemas, electrical pinouts, command sequences | Future `interfaces/` ICDs |
 | RTL, schematics, pseudocode, component choices | Future `design/` specs |
 | Worked examples and bring-up procedures | Future `integration/` guides |
