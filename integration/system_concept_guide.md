@@ -1,7 +1,7 @@
 # Modular Detector Controller Concept Guide
 
 - **Status:** Draft / Non-normative
-- **Last updated:** 2026-06-30
+- **Last updated:** 2026-07-05
 
 This guide explains the modular detector controller from first principles. It is intended for readers who need to understand the system before reading the detailed ADRs, ICDs, firmware design specs, or hardware design specs.
 
@@ -477,7 +477,7 @@ These terms are useful when moving from this guide into the ADRs.
 | Term | Short meaning |
 |---|---|
 | `fault_vector` | Sticky per-source diagnostic bits for local fault/event sources. |
-| `local_trip_summary` | Local hardware-fault summary latch that contributes to the FPGA `OK` driver. |
+| `local_trip_summary` | Local trip-summary latch (any set `fault_vector` bit, hardware or supervisory) that contributes to the FPGA `OK` driver. |
 | `ok_fault` | Registered FPGA output that drives the local open-drain `OK` fault path. |
 | `boot_pulldown_active` | Startup latch that intentionally holds `OK` LOW until clock qualification succeeds. |
 | `injected_fault` | Host-authorized maintenance bit used to test the `OK` driver path. |

@@ -1,7 +1,7 @@
 ﻿# ADR-001: Board Health Detection and Fault Visibility Strategy
 
 **Status:** Resolved
-**Last updated:** 2026-04-09
+**Last updated:** 2026-07-05
 
 ---
 

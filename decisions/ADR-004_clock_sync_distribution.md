@@ -1,7 +1,7 @@
 ﻿# ADR-004: Clock and Sync Distribution
 
 **Status:** Resolved
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-05
 
 ---
 

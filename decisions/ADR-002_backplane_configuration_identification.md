@@ -1,7 +1,7 @@
 ﻿# ADR-002: Backplane Board Identification and Configuration Strategy
 
 **Status:** Resolved
-**Last updated:** 2026-03-27
+**Last updated:** 2026-07-05
 
 ---
 
