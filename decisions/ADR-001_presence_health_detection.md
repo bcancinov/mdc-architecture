@@ -33,16 +33,16 @@ The table above defines the hardware fault taxonomy only. Detection paths, propa
 
 | # | Failure Mode | Detected By | Propagated Via | Hardware Latency | FSM Safety Action |
 |:---|:---|:---|:---|:---|:---|
-| **F1** | Continuity loop broken | Main board (`LOOP_IN` drops) | Main latches fault, pulls `OK` LOW | ~2 clock cycles | All boards → `ERROR.init` |
-| **F2a** | Brain dead (power/reset) | Fail-safe hardware buffer/path | Local fail-safe driver pulls `OK` LOW | Instant (combinational + bus propagation) | All boards → `ERROR.init` |
-| **F2b** | Brain dead (logic frozen) | Hardware Watchdog IC (differentiated from F5 via diagnostic latches; see R6) | Watchdog IC pulls `OK` LOW | Sub-microsecond (after timeout) | All boards → `ERROR.init` |
-| **F3** | Internal electronic fault | FPGA logic / sensors | Faulty board pulls `OK` LOW | 1 clock cycle | All boards → `ERROR.init` |
+| **F1** | Continuity loop broken | Main board (`LOOP_IN` drops) | Main latches fault, pulls `OK` LOW | ~2 clock cycles | All boards → `ERROR.run` |
+| **F2a** | Brain dead (power/reset) | Fail-safe hardware buffer/path | Local fail-safe driver pulls `OK` LOW | Instant (combinational + bus propagation) | All boards → `ERROR.run` |
+| **F2b** | Brain dead (logic frozen) | Hardware Watchdog IC (differentiated from F5 via diagnostic latches; see R6) | Watchdog IC pulls `OK` LOW | Sub-microsecond (after timeout) | All boards → `ERROR.run` |
+| **F3** | Internal electronic fault | FPGA logic / sensors | Faulty board pulls `OK` LOW | 1 clock cycle | All boards → `ERROR.run` |
 | **F4** | OK driver damaged | Board self-read / host verification | Ethernet telemetry / test | Slow (reporting) | Maintenance only |
-| **F5** | CLOCK / pet-path fault | Internal clock monitor (`F5_latch`) + watchdog correlation (`WD_latch`); see R6 diagnostic truth table | Faulty board pulls `OK` LOW (clock monitor or watchdog, whichever fires first) | Clock monitor: sub-microsecond; watchdog: timeout bounded | All boards → `ERROR.init` |
+| **F5** | CLOCK / pet-path fault | Function boards: internal clock monitor (`F5_latch`) + watchdog correlation (`WD_latch`); main board: external CLOCK-source monitor (dedicated `fault_vector` bit); in `START.wait`, the qualification-timeout path (ADR-003 R7); see R6 diagnostic truth table | Faulty board (main or function) pulls `OK` LOW (clock monitor or watchdog, whichever fires first) | Clock monitor: sub-microsecond; watchdog: timeout bounded; `START.wait`: qualification timeout | All boards → `ERROR.run` |
 | **F6** | Loss of required backplane input power | Relay mechanics (de-energizes) & Ethernet timeout | Relay physical de-energization / Ethernet timeout | Instant safety cutoff (relay); diagnostic reporting is slow | Hardware safe-state |
-| **S1** | Armed keep_alive timeout | Board-local lease timer (ICD-defined) | Timed-out board pulls `OK` LOW | Detection: `T_keepalive_lease_max` (ICD-defined timeout). Assertion: 1 FSM clock cycle | All boards → `ERROR.init` |
+| **S1** | Armed keep_alive timeout | Board-local lease timer (ICD-defined) | Timed-out board pulls `OK` LOW | Detection: `T_keepalive_lease_max` (ICD-defined timeout). Assertion: 1 FSM clock cycle | All boards → `ERROR.run` |
 
-**Taxonomy separation:** F1–F6 are hardware faults — always detectable regardless of FSM state. S1 is a supervisory interlock event — active only while armed (`EN=1`). Both use the same physical trip path (`OK` LOW → `ERROR.init`), but root causes and active conditions are fundamentally different. See R10.
+**Taxonomy separation:** F1–F6 are hardware faults — always detectable regardless of FSM state. S1 is a supervisory interlock event — active only while armed (`EN=1`). Both use the same physical trip path (`OK` LOW → `ERROR.run`), but root causes and active conditions are fundamentally different. See R10.
 
 ---
 
@@ -149,19 +149,11 @@ Function boards do not monitor loop continuity directly. They only observe `OK` 
 1. **Detection & Latching:** If `LOOP_IN` drops, the main board sets the loop-break source bit (`fault_vector[F1_LOOP_BREAK]`, level-sensitive set).
 2. **Propagation Timing:** This asserts `local_trip_summary` and pulls `OK` LOW within two clock edges (one cycle to latch the fault vector, one cycle to propagate through the registered OK driver).
 3. **Fleet-wide Visibility:** All boards see `OK` drop simultaneously — the exact same mechanism as F3 (internal electronic fault). This intentionally eliminates the need for function boards to monitor the loop directly.
-4. **Clear Semantics:** The loop-break latch persists through `ERROR`. It is cleared only at the `ERROR.clear → START.wait` boundary when `LOOP_IN` reads healthy, which prevents intermittent connector bounces from self-clearing.
+4. **Clear Semantics:** Clearing follows ADR-003 R6: the F1 bit in `fault_vector` is primed to `0` on `ERROR.clear` entry and re-sets immediately while `LOOP_IN` remains unhealthy (level-sensitive set); `local_trip_summary` releases only at the successful `ERROR.clear → START.wait` boundary. Net effect: the fault cannot clear while the loop is still broken, and intermittent connector bounces cannot self-clear.
 
 Canonical interlock logic (`ok_fault`, relay fast-open/slow-close behavior, and injected-fault-authorized OK assertion path) is defined in ADR-003 R5 and should not be redefined independently here.
 
-| Failure | Detected by | Propagated via | Latency |
-|---|---|---|---|
-| F1 | Main board (LOOP_IN drops) | Main board latches fault, pulls OK low (two FPGA clock cycles) | ~2 clock cycles |
-| F2a | Fail-safe hardware buffer/path | Local fail-safe driver pulls OK low directly | Instant (combinational + bus propagation) |
-| F2b | Watchdog IC | Pulls OK low directly | Sub-microsecond (device + bus propagation, after timeout) |
-| F3 | Any board | Pulls OK low directly | One FPGA clock cycle + bus propagation (registered OK output path) |
-| F4 | Board self (loopback read) | Ethernet telemetry | Slow |
-| F5 | Function board timing-path monitor (`watchdog_pet_edge_detected()` in `START.wait`; internal clock monitor `F5_latch` + watchdog sense `WD_latch` post-qualification; see R6 diagnostic truth table) AND Main board external CLOCK-source monitor (`main_clock_edge_detected()` in `START.wait`; dedicated CLOCK-source fault bit in `fault_vector` post-qualification; see ADR-003 R7/R8) | Faulty board (main or function) pulls OK low via clock-monitor FPGA driver or watchdog timeout, whichever fires first | START.wait qualification timeout (per ADR-003 `R7`) or clock-monitor/watchdog trip after post-qualification CLOCK loss |
-| F6 | Host/main via Ethernet polling while `LOOP_IN` remains healthy (connector-intact in-situ input-power collapse) | Ethernet telemetry/poll timeout | Slow (poll interval / host timeout) |
+Per-failure detection, propagation, and latency are defined once in the **fault detection and response summary** table in the Context section and are intentionally not repeated here.
 
 **Classification note:** If connector/cable discontinuity causes `LOOP_IN` to drop, the immediate interlock trigger is F1 (fast path). If diagnostics also confirm required input-power loss as the root cause, tag it as F6 subcase A with F1 (continuity loop broken) detection path.
 **Detector note:** For F5, the failure mode is the `CLOCK -> divider -> pet` timing path becoming invalid. Post-qualification detection uses two independent diagnostic latches (`F5_latch` from the internal clock monitor and `WD_latch` from the watchdog sense line) to classify the root cause after the system has safely tripped. See R6 diagnostic truth table.
@@ -174,9 +166,7 @@ F2a (digital-rail loss/reset collapse) is handled by the fail-safe `OK` driver r
 - Every board (main and function) must implement a dedicated external hardware watchdog IC whose timeout output can independently pull `OK` LOW.
 - The watchdog IC and its open-drain `OK` driver must be powered from an always-on local supply derived from `+12V_RAW` or an equivalent independent always-on path (independent of FPGA digital rails).
 - The watchdog-to-`OK` interlock path is intentionally **not** hardware-latched. When valid petting resumes and timeout clears, the watchdog output may release `OK`.
-- **Cross-domain cascaded pet source (required):** The physical pet signal must require active transitions in both the management and timing clock domains.
-  1. Management domain (board-local independent oscillator): the safety FSM emits a continuous toggle (`wd_pet_toggle_mgmt`).
-  2. Timing domain (role-specific): that toggle is synchronously sampled before driving the watchdog pet pin, so a frozen management domain or missing timing clock both stop valid pet transitions.
+- **Cross-domain pet liveness (required):** Valid pet transitions must cease if *either* the management clock domain *or* the timing clock domain stops — a frozen management FSM and a missing timing clock must both starve the watchdog. The reference pattern (non-normative) is a cascaded pet source: the safety FSM emits a continuous toggle in the management domain (`wd_pet_toggle_mgmt`, board-local independent oscillator), and the role-specific timing-domain clock synchronously samples that toggle before driving the watchdog pet pin. Alternative implementations are acceptable if they preserve the same two-domain liveness property.
 - **Timing-domain source by board role:**
   1. Main board: sample using the raw external `CLOCK` source domain (the same domain monitored by `main_clock_edge_detected()` in ADR-003).
   2. Function boards: sample using the dedicated watchdog divider (÷M from the 2 MHz baseline) derived from distributed backplane `CLOCK` (ADR-004 R4).
@@ -198,7 +188,7 @@ Each board implements diagnostic latches that allow the host to classify root ca
   1. **`F5_latch`:** Set when an internal clock monitor detects that the distributed 100 MHz `CLOCK` has stopped toggling. The clock monitor runs on the independent local management clock and remains operational even when the distributed CLOCK is absent. On detection, the FPGA also pulls `OK` LOW via its registered fault driver (same path as F3). Detection latency is bounded by the management clock period and the monitor's edge-timeout window (ICD-defined, order of microseconds).
   2. **`WD_latch`:** Set when the FPGA detects — via the dedicated watchdog status sense line — that the external watchdog IC has tripped.
 - Main board diagnostics must include the same watchdog observer latch (`WD_latch`) and a dedicated external-clock-source fault bit in `fault_vector` (equivalent F5-source role for main-board diagnostics).
-- `F5_latch`/`fault_vector` and `WD_latch` are diagnostic memory only; they do not participate directly in the hardware interlock assertion path. Clearing semantics are defined by the `ERROR.clear` recovery sequence in ADR-003 R6 (rules 6-10): `fault_vector` is primed to `0` on `ERROR.clear` entry and may re-set during `ERROR.clear`; `WD_latch` clears only on a successful `ERROR.clear -> START.wait` boundary and is retained on the failure path.
+- `F5_latch`/`fault_vector` and `WD_latch` are diagnostic memory only; they do not participate directly in the hardware interlock assertion path. Clearing semantics are defined by the `ERROR.clear` recovery sequence in ADR-003 R6 (rules 6-10): `fault_vector` is primed to `0` on `ERROR.clear` entry and may re-set during `ERROR.clear`; `WD_latch` clears on a successful `ERROR.clear -> START.wait` boundary (retained on the failure path) and additionally at the `START.wait -> IDLE` qualification-success boundary, so watchdog trips that legitimately occur during fleet power-up — before distributed `CLOCK` is available — do not persist into IDLE/RUN diagnostics.
 
 **F5 (CLOCK/pet-path fault) / F2b (brain dead, logic frozen) diagnostic differentiation (normative):**
 
@@ -209,10 +199,10 @@ After the system trips into `ERROR.run`, the host reads the diagnostic latches v
 | 1 | 1 | Responding | **F5** | CLOCK loss cascaded into pet-path stop → watchdog also tripped |
 | 1 | 0 | Responding | **F5** | Clock monitor caught CLOCK loss before watchdog timeout expired |
 | 0 | 1 | Responding | **F2b** | Distributed CLOCK is healthy; FPGA logic/pet-path frozen |
-| 0 | 0 | Responding | **No local HW fault (Check S1)** | Board entered ERROR due to another board's `OK` assertion, OR tripped itself via S1 (armed keep_alive timeout). Check `latched_supervision_fault` per R10 |
+| 0 | 0 | Responding | **No local timing-path fault** | Board entered ERROR due to another board's `OK` assertion, OR tripped itself via S1 (armed keep_alive timeout). Read the full `fault_vector` per R10 |
 | X | X | Unresponsive | **F2a** (or severe F2b) | Board completely dead; fail-safe path or watchdog pulled `OK` LOW |
 
-**Scope note:** This table classifies hardware fault modes (F1–F6) only. For boards reporting `(0, 0, Responding)`, also check `latched_supervision_fault` per R10 to differentiate S1 (armed keep_alive timeout) from "dragged into ERROR by another board."
+**Scope note:** This table classifies hardware fault modes (F1–F6) only. For boards reporting `(0, 0, Responding)`, read the full `fault_vector` to differentiate S1 (dedicated S1 bit set, R10) from "dragged into ERROR by another board" (`fault_vector == 0`).
 
 **Corrective action:** If `F5_latch == 1`, restore distributed `CLOCK` first, then inspect divider/pet-path integrity. If only `WD_latch == 1`, investigate FPGA logic/routing for the pet signal path.
 
@@ -224,7 +214,7 @@ Key properties:
 
 ### R7: F4 (OK driver damaged) is mitigated by certified component selection and detected via OK loopback
 
-**Primary mitigation — certified components:** The open-drain driver IC must be selected from a safety-certified portfolio with a published FIT rate (Failures In Time, per 10⁹ hours) and internal diagnostic coverage of its own driver failure modes. Relevant standards are IEC 61508 (SIL rating) and ISO 26262 (ASIL rating). Using a certified IC quantifies the probability of F4 and reduces it to an engineered, acceptable level. Full certification of the system to these standards is not required, but component-level FIT data provides a quantifiable safety argument for the OK bus reliability.
+**Primary mitigation — quantified driver reliability:** The probability of F4 must be quantifiably low, and the board design package must record the supporting reliability argument. The default way to demonstrate this is selecting a driver IC from a safety-certified portfolio with a published FIT rate (Failures In Time, per 10⁹ hours; relevant standards are IEC 61508 and ISO 26262), but an equivalent documented argument — for example, a discrete open-drain stage with established reliability data — is acceptable. Full certification of the system to these standards is not required.
 
 **Secondary detection — OK loopback at fault time:** When a real fault — F3 (internal electronic fault) — occurs, the board asserts its driver and immediately reads OK back. If OK remains HIGH, the driver is broken — F4 (OK driver damaged) — and the board reports it via Ethernet telemetry. F3 + F4 simultaneously is the dangerous combination: a real fault occurs but is not propagated, leaving the system running in a damaged state. The Ethernet report must alert the operator immediately.
 
@@ -259,6 +249,8 @@ Route the loop so the full return path physically traverses the extension cable 
 
 Active signal replication (SYNC, CLOCK, EN, CLEAR) on the secondary backplane may be performed by the bridge board, but those signals are outside the scope of the continuity loop.
 
+**Hot-swap stance (normative):** Live insertion or removal of boards is not supported. Removing or inserting a board necessarily interrupts the continuity loop and trips F1 — by design. Board replacement is a service action performed with the system latched in `ERROR` or powered down. "Hot-plug" references in ADR-005 (connector inrush, contact sequencing) concern electrical robustness of the mating event, not operational hot-swap.
+
 LVDS clock forwarding and board identification concerns are outside the scope of this ADR.
 
 The supporting continuity-loop routing diagram is kept in [ADR-001_fault_detection_reference.md](reference/ADR-001_fault_detection_reference.md).
@@ -289,20 +281,20 @@ S1 is classified separately from the hardware fault taxonomy (F1–F6) because i
 | Active condition | Always (any FSM state) | Only while armed (`EN=1`) |
 | Detection mechanism | Hardware (loops, watchdogs, sensors) | Software/protocol (Ethernet lease timer) |
 
-**Behavior:** While armed, each board maintains a keep_alive lease timer refreshed by periodic host Ethernet traffic. If the lease expires (`> T_keepalive_lease_max`), the board sets `latched_supervision_fault` and pulls `OK` LOW, triggering global `ERROR.init`. Behavioral rules and timing constants are defined in ADR-003 R6 (armed keep_alive supervision rule). Protocol details (message format, cadence, timeout value) are ICD-defined.
+**Behavior:** While armed, each board maintains a keep_alive lease timer refreshed by periodic host Ethernet traffic. If the lease expires (`> T_keepalive_lease_max`), the board sets the dedicated S1 bit in `fault_vector`; the standard trip rule (ADR-003 R6) then asserts `local_trip_summary`, pulls `OK` LOW, and triggers global `ERROR.run`. S1 deliberately reuses the same latch, trip, and clear mechanism as every other `fault_vector` source — only its taxonomy classification differs. There is no separate supervision latch. Behavioral rules and timing constants are defined in ADR-003 R6 (armed keep_alive supervision rule). Protocol details (message format, cadence, timeout value) are ICD-defined.
 
 **Main-board liveness clarification (normative):** The host keep_alive loop is not the primary safety cutoff for a frozen main board while armed. Primary protection is the main board's cascaded external watchdog path, which must independently pull `OK` LOW on main-board freeze or timing-path failure. That hardware `OK` pull-down immediately de-energizes all function-board relays via `RESET = NOT(EN) OR NOT(OK)` (ADR-003 R9). Host polling remains supervisory/diagnostic and cannot override a hardware `OK` assertion.
 
-**Diagnostic differentiation in ERROR.run:**
+**Diagnostic differentiation in ERROR.run:** Diagnosis is uniform — the host reads `fault_vector` over Ethernet:
 
-| `local_trip_summary` | `latched_supervision_fault` | `F5_latch` / `WD_latch` | Ethernet | Classification |
-|---|---|---|---|---|
-| 1 | 0 | see R6 truth table | Responding | Hardware fault (F1–F6) |
-| 0 | 1 | 0 / 0 | Responding | **S1** — keep_alive timeout while armed |
-| 0 | 0 | 0 / 0 | Responding | No local fault — dragged into ERROR by another board |
-| X | X | X / X | Unresponsive | F2a or severe F2b — board dead |
+| `fault_vector` | Ethernet | Classification |
+|---|---|---|
+| S1 bit set | Responding | **S1** — keep_alive timeout while armed |
+| Any other bit set | Responding | Hardware fault (F1–F6); classify per R6 truth table |
+| `fault_vector == 0` | Responding | No local fault — dragged into ERROR by another board |
+| X | Unresponsive | F2a or severe F2b — board dead |
 
-**Design note:** S1 uses the same physical trip path as F1–F6 (pulls `OK` LOW → `ERROR.init`). This is intentional — loss of host communication while armed is a safety-critical event that warrants the same immediate response as a hardware fault, even though the root cause is different.
+**Design note:** S1 uses the same physical trip path as F1–F6 (pulls `OK` LOW → `ERROR.run`). This is intentional — loss of host communication while armed is a safety-critical event that warrants the same immediate response as a hardware fault, even though the root cause is different.
 
 ---
 
@@ -318,7 +310,7 @@ Board identification and slot topology are configuration concerns, not health or
 
 - Every board must include both OK open-drain hardware and continuity-loop routing; either mechanism alone is insufficient.
 - The main board FPGA implementation must keep the OK output registered to avoid glitch-induced global trips.
-- Every board requires a fail-safe FPGA-to-OK driver path (independent local supply + no FPGA-I/O back-power under partial power-down), an independently powered external watchdog path to the OK bus, and a dedicated watchdog status sense line for `WD_latch` telemetry. The watchdog pet source must use the cascaded cross-domain rule (management-domain toggle sampled by a timing-domain clock): main samples in the raw external CLOCK domain; function boards sample in the local divider domain derived from distributed `CLOCK`.
+- Every board requires a fail-safe FPGA-to-OK driver path (independent local supply + no FPGA-I/O back-power under partial power-down), an independently powered external watchdog path to the OK bus, and a dedicated watchdog status sense line for `WD_latch` telemetry. The watchdog pet source must satisfy the two-domain liveness rule (pet transitions stop if either the management or the timing domain freezes): main uses the raw external CLOCK domain as its timing domain; function boards use the local divider domain derived from distributed `CLOCK`.
 - Each function board additionally requires an internal clock monitor on the local management clock domain with `F5_latch`, plus diagnostic support for F4 loopback reporting.
 - F6 uses dual detection paths by design: fast interlock via F1 when continuity breaks, and slow telemetry when continuity remains intact.
 

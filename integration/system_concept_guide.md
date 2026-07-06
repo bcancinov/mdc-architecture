@@ -39,7 +39,7 @@ Some words in the ADRs are precise but easy to misread at first. This guide uses
 | **Safe** | The detector-facing outputs are in a non-hazardous condition. In practice, `EN = 0`, function-board relays are open, and acquisition-driving outputs are not armed. |
 | **Arm** | Deliberately move the system from safe `IDLE` into armed `RUN` behavior by asserting `EN = 1`. Arming allows function boards to close their relay paths and prepare detector-driving outputs, but only after readiness checks pass. |
 | **Disarm** | Return from armed operation to safe operation by dropping `EN = 0`. Function boards must de-arm immediately. |
-| **Run** | The armed state family where acquisition can occur. `RUN` includes preparation, waiting for trigger/sync, active acquisition, stopping, and disarm cleanup. |
+| **Run** | The armed state family where acquisition can occur. `RUN` includes preparation, waiting for trigger/sync, active acquisition, and stopping. Disarm exits directly to `IDLE`. |
 | **Fault** | A hardware or safety-relevant condition that requires immediate transition to the safe error path. Faults propagate through `OK = 0`. |
 | **Not Ready** | A condition that blocks arming but is not itself a fault while `EN = 0`. Example: local synchronization readiness has not completed after pre-arm `SYNC` on a board that needs it. |
 | **Trip** | The act of pulling `OK` LOW or otherwise forcing the system into the safe error path. |
@@ -102,7 +102,7 @@ There are four ideas that make the rest of the documents easier to read:
    Software and Ethernet are useful for diagnostics, but the immediate trip path is hardware: the `OK` bus, continuity loop, watchdogs, fail-safe drivers, and relay reset logic.
 
 2. **The main board coordinates but does not acquire science data.**  
-   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, monitors global health, and provides five phase-capable LVDS sync outputs for backplane utility DC-DC converters. Converter use of those outputs is optional. The main board has no sequencer.
+   The main board distributes `CLOCK` and `SYNC`, drives `EN` and `CLEAR`, monitors global health, and provides the backplane utility DC-DC sync capability defined in ADR-005 (converter use is optional). The main board has no sequencer.
 
 3. **Function boards enforce their own readiness.**  
    The host should verify readiness before arming, but each function board still checks locally when `EN` rises. If a required condition is missing, that board trips the system.
@@ -118,7 +118,7 @@ Conceptually, the system has these pieces:
 
 | Piece | Role |
 |---|---|
-| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides five phase-capable LVDS utility DC-DC sync outputs whose use is instrument-selectable. |
+| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides utility DC-DC sync capability (ADR-005; use is instrument-selectable). |
 | Function boards | Detector-specific boards such as video, bias, clock, or bridge boards. They run sequencers, drive outputs, monitor local faults, and enforce arm readiness. |
 | Backplane | Carries shared safety/control signals, point-to-point clock/sync distribution, `+12V_RAW`, and common utility voltages. |
 | Remote host | Owns topology, sends Ethernet commands, uploads sequencers, performs hash attestation, polls diagnostics, and initiates recovery. |
@@ -198,7 +198,7 @@ flowchart LR
     DIAG --> ROOT["Root cause identified"]
 ```
 
-Diagnostic signals such as `fault_vector`, `F5_latch`, `WD_latch`, and `latched_supervision_fault` exist for the slower explanation step. They should not be confused with the immediate safety trip itself.
+Diagnostic signals such as `fault_vector` (including its S1 supervision-timeout bit), `F5_latch`, and `WD_latch` exist for the slower explanation step. They should not be confused with the immediate safety trip itself.
 
 ---
 
@@ -239,10 +239,9 @@ Each board powers up using its own local management clock. It reads NVM, applies
 This is the stability gate shared by boot and recovery. A board may enter `IDLE` only after:
 
 - required clock evidence is present
-- `OK` has risen at least once
 - `OK` remains continuously stable for the required window
 
-If those checks do not pass within the defined deadlines, the board enters `ERROR.init`.
+If those checks do not pass within the defined deadlines, the board enters `ERROR.run`.
 
 ### IDLE
 
@@ -262,7 +261,7 @@ The main board checks its own readiness before asserting `EN`.
 
 When `EN` rises, function boards independently evaluate their local arm gates. If readiness is valid, they enter `RUN.init`, then `RUN.wait`, then respond to `SYNC` edges for acquisition.
 
-If `OK` drops during any armed state, the system transitions to `ERROR.init`.
+If `OK` drops during any armed state, the system transitions to `ERROR.run`.
 
 ### Disarm
 
@@ -363,16 +362,12 @@ Complete board power loss is also safe because relays are normally open and ener
 The fault recovery path is:
 
 ```text
-ERROR.init -> ERROR.run -> ERROR.clear -> START.wait -> IDLE
+ERROR.run -> ERROR.clear -> START.wait -> IDLE
 ```
-
-### ERROR.init
-
-The system enters the safe fault state. The main board drops `EN`. Function-board relay reset logic opens relays. Fault latches remain held.
 
 ### ERROR.run
 
-The system waits here while the operator or host polls diagnostics. This is where the host identifies whether the root cause was a local hardware fault, clock fault, watchdog event, loop break, supervision timeout, or another board dragging the system into `ERROR`.
+The system enters this safe fault state directly on any fault: the main board drops `EN`, function-board relay reset logic opens relays, and fault latches remain held. The system then waits here while the operator or host polls diagnostics. This is where the host identifies whether the root cause was a local hardware fault, clock fault, watchdog event, loop break, supervision timeout, or another board dragging the system into `ERROR`.
 
 ### ERROR.clear
 
@@ -411,7 +406,7 @@ This avoids requiring every function board to multiply a low-frequency reference
 1. In `IDLE`, `SYNC` resets watchdog timing dividers and any implemented synchronized local converter divider before arming.
 2. In `RUN`, `SYNC` starts and stops acquisition windows.
 
-Common utility-voltage converters live in the backplane/common-power domain and operate at a nominal fixed 2 MHz during acquisition. The main board provides five independently phase-capable, point-to-point LVDS utility-sync outputs so an instrument may synchronize and optionally phase-interleave its converter channels. The connector and timing capability are always present; use of synchronization and the phase plan are instrument choices.
+Common utility-voltage converters live in the backplane/common-power domain and operate at a nominal fixed 2 MHz during acquisition. The main board provides the utility-sync capability defined in ADR-005 so an instrument may synchronize and optionally phase-interleave its converter channels. The capability is always present; use of synchronization and the phase plan are instrument choices.
 
 Noise-sensitive function boards filter each consumed analog utility rail locally, inside the module immediately after the backplane connector and before the low-noise LDO or analog point-of-load regulator. A damped C-L-C network is the normal implementation, with attenuation, component values, damping, inrush, and dropout verified by the board ICD/design specification. This local filter supplements rather than replaces the common-power rail's own ripple and conducted-noise compliance.
 
@@ -468,6 +463,7 @@ Use this guide to understand the system shape, then use the detailed documents f
 | FSM states, signal semantics, transition guards, timing constants, relay logic | `decisions/ADR-003_state_machine_definition.md` |
 | 100 MHz clock distribution, SYNC behavior, optional local-converter divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
 | Backplane utility voltages, `+12V_RAW`, 2 MHz utility switching, sync capability, module filtering, and connector zoning | `decisions/ADR-005_backplane_utility_voltages.md` |
+| Acquisition data path, overrun policy, keep_alive/bulk-data independence | `decisions/ADR-006_acquisition_data_path.md` |
 | Message schemas, electrical pinouts, command sequences | Future `interfaces/` ICDs |
 | RTL, schematics, pseudocode, component choices | Future `design/` specs |
 | Worked examples and bring-up procedures | Future `integration/` guides |
@@ -485,7 +481,7 @@ These terms are useful when moving from this guide into the ADRs.
 | `ok_fault` | Registered FPGA output that drives the local open-drain `OK` fault path. |
 | `boot_pulldown_active` | Startup latch that intentionally holds `OK` LOW until clock qualification succeeds. |
 | `injected_fault` | Host-authorized maintenance bit used to test the `OK` driver path. |
-| `latched_supervision_fault` | Sticky indication that armed keep_alive supervision timed out. |
+| `fault_vector[S1]` | Sticky `fault_vector` bit set when armed keep_alive supervision times out. |
 | `keep_alive` | Dedicated host heartbeat command that refreshes a board's armed supervision lease. |
 | `F5_latch` | Diagnostic indication of local clock/pet-path fault detection. |
 | F4 | Failure mode where a board's `OK` driver path is damaged or stuck open. |

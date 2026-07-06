@@ -113,10 +113,12 @@ Transport/session implementation (for example TCP vs UDP, client/server role per
 
 | Board type | Required Ethernet speed |
 |---|---|
-| Video function board | 1000 Mbps (Gigabit) — sequencer upload and image data transfer demand higher throughput |
+| Video function board | 1000 Mbps (Gigabit) — sequencer upload and image data transfer demand higher throughput (acquisition data path architecture: ADR-006) |
 | All other boards (main, clock, bias, bridge, etc.) | 10/100 Mbps sufficient — only control, telemetry, and configuration traffic |
 
 This keeps the main board firmware simple and allows the remote host to address each board directly by IP for control, diagnostics, and injected-fault F4 driver verification sequencing in `IDLE`/`ERROR.run` (ADR-003).
+
+**Security and trust model (normative):** The control network is assumed to be a physically and/or logically isolated instrument LAN. Any host with access to that network is trusted: commands (`arm`, `clear_error`, `set_injected_fault`, configuration writes, etc.) carry no per-command authentication, and protection is provided by network isolation, not by the protocol. Likewise, physical access to a board's UART port implies trust. This is a deliberate simplicity trade-off. The hardware interlock layer (OK bus, watchdogs, fail-safe paths, relay reset logic) protects against faults regardless of command origin, but it does not protect against well-formed hazardous commands (for example, arming with wrong operational parameters) — a trusted network peer can command anything an operator can. Network isolation is therefore a hard deployment requirement, not a convenience. Instruments that cannot guarantee isolation must add compensating controls at the ICD/deployment level; message-integrity checking (e.g., framing checksums) remains an ICD option for corruption protection, not authentication.
 
 ---
 

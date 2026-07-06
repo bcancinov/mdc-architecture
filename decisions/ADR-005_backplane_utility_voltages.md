@@ -71,7 +71,7 @@ backplane connector -> protection/inrush -> dirty-side capacitor
                     -> low-noise LDO/regulator -> sensitive analog load
 ```
 
-A damped C-L-C (pi) network is the normal implementation, but this ADR specifies the required isolation and attenuation rather than mandating one topology for every load. The board design shall prevent excessive filter Q or impedance interaction with the backplane source, regulator, and load. It shall also account for capacitor DC-bias derating and parasitics, inductor saturation/DCR/self-resonance, hot-plug or startup inrush, regulator dropout, and load transients.
+A damped C-L-C (pi) network is the normal implementation, but this ADR specifies the required isolation and attenuation rather than mandating one topology for every load. Filter stability (damping/Q, impedance interaction with the backplane source, regulator, and load) and component-level engineering concerns (derating, parasitics, saturation, inrush, dropout, load transients) are design-specification scope, verified per the board ICD/design package.
 
 Each function-board ICD/design specification shall define the required attenuation at 2 MHz and relevant harmonics, the implemented topology and damping method, and the maximum input capacitance/inrush presented to the backplane. Digital-only loads do not require the same analog input filter unless their board-level noise or transient budget requires one.
 
