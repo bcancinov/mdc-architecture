@@ -1,7 +1,7 @@
 ﻿# ADR-002: Backplane Board Identification and Configuration Strategy
 
 **Status:** Resolved
-**Last updated:** 2026-07-05
+**Last updated:** 2026-07-17
 
 ---
 
@@ -13,7 +13,7 @@ This is a configuration and identification concern, distinct from fault detectio
 
 Core challenge: Ethernet cannot be the bootstrap channel, because Ethernet itself must be configured first. We need a network-independent bootstrap path.
 
-> **Core Decision:** Bootstrap each board over dedicated UART (baseline identity + network fields), then use Ethernet for normal operational orchestration.
+> **Core Decision:** UART is the only path for persistent identity and bootstrap-network configuration. Ethernet provides volatile operational configuration and sequencer loading for the current boot session and can never write NVM.
 
 ---
 
@@ -41,7 +41,7 @@ A 2-wire bus shared across all slots. Main scans at boot to identify boards and 
 
 Every board — the main board and all function boards — has a dedicated UART port. It serves two roles:
 
-- **Commissioning and reconfiguration:** writing NVM parameters (IP, port, board type)
+- **Commissioning and service:** reading and writing permitted NVM identity, network, and factory-data fields
 - **Fallback diagnostics:** when Ethernet fails, UART is the only remaining communication channel to inspect board state, read fault logs, and diagnose the failure
 
 The UART port must remain physically accessible in normal operation. It is the last-resort path when Ethernet is unavailable.
@@ -54,11 +54,11 @@ The UART port must remain physically accessible in normal operation. It is the l
 
 **Firmware constraint — command validation:** Firmware must validate all received bytes before acting. Partial frames, malformed commands, and garbage bytes must be discarded silently.
 
-**UART command set:** A minimum catalog of UART commands must be shared by all boards — covering at least NVM read/write for network parameters and basic diagnostic queries. This common command set is defined in the ICD. Board-type specific commands may extend it but cannot replace it.
+**UART command set:** A minimum catalog of UART commands must be shared by all boards — covering at least NVM read/write and basic diagnostic queries. Command names, framing, and field layouts are defined in the ICD. Board-type-specific commands may extend the common set but cannot replace it.
 
-### R2: All boards have non-volatile memory (NVM)
+### R2: NVM is limited to persistent bootstrap, identity, and necessary factory data
 
-Every board stores its configuration persistently in onboard NVM. At minimum, NVM holds:
+Every board has onboard NVM. At minimum, it holds:
 
 | Parameter | Main | Function boards |
 |---|---|---|
@@ -66,32 +66,29 @@ Every board stores its configuration persistently in onboard NVM. At minimum, NV
 | Ethernet port | Yes | Yes |
 | Board type | Yes | Yes |
 | MAC address | Yes | Yes |
+| Unique board/serial ID | Yes | Yes |
+| Hardware revision | Yes | Yes |
 
 MAC address is mandatory for any Ethernet device and must be unique per board. It is typically stored in a dedicated EEPROM pre-programmed at manufacturing with a guaranteed unique address (e.g. Microchip 24AA02E48 or equivalent).
 
-Additional NVM contents (calibration data, operational parameters) are board-type specific and defined in the ICD.
+Board-local manufacturing trim or calibration data may also reside in NVM when required by the electronics. Normal operational settings — including bias, clock, timing, acquisition, enable-mask, and sequencer data — are not persistent board configuration. Software version is reported from the active firmware image and is not a writable configuration field. Exact NVM layout and any write-protected factory fields are ICD-defined.
 
-### R3: Configuration is written once at commissioning via UART
+### R3: Persistent configuration is commissioned and maintained via UART
 
-At manufacturing or initial deployment, each board is configured individually via its UART port. The operator writes the minimum bootstrap parameters needed for deterministic network bring-up. This is a one-time baseline operation per board.
+At manufacturing or initial deployment, each board is configured individually via its UART port. Later persistent changes use the same UART path.
+Commissioning requires no network connection: write permitted fields (MAC only if not factory-programmed), read them back, and verify them before service.
 
-Commissioning sequence per board:
-1. Connect to board UART
-2. Write NVM: IP, port, board type, MAC (if not pre-programmed)
-3. Verify written values
-4. Disconnect
+### R4: Boot loads persistent identity and network data; the host supplies operational configuration
 
-No network connection is required during commissioning.
+During `START.boot` (ADR-003), each board reads and validates its persistent identity, network, and required factory data. Boot runs from the board's independent local management clock and does not depend on distributed backplane `CLOCK`. Volatile operational parameters initialize to firmware-defined safe values, such as disabled outputs and zero bias.
 
-### R4: At boot, each board fully configures itself from NVM
+Operational configuration is held only in volatile memory. A boot session ends when the board resets, loses power, or otherwise re-enters `START.boot`; fault recovery and arm/disarm cycles do not end it. Reset restores the safe values and clears volatile sequencer state.
 
-During `START.boot` (ADR-003), each board reads all NVM parameters, not only network fields. This includes operational defaults (bias, clocks, calibration, etc.). Boot runs from the board's independent local management clock and does not depend on distributed backplane `CLOCK`. By `IDLE`, the board is fully configured and can operate without Ethernet.
+### R5: UART access follows an explicit state allowlist
 
-The remote host may override operational parameters via Ethernet during IDLE before arming. These overrides apply to the current session only and do not automatically persist to NVM unless explicitly written.
+Non-disruptive UART diagnostics and NVM reads may be accepted in any FSM state. UART NVM writes are accepted only in `IDLE`, `ERROR.run`, or a separate pre-FSM recovery mode; all other states reject them. A successful write changes persistent storage only and takes effect after the next board reset and boot.
 
-### R5: UART is the reconfiguration path
-
-If a bootstrap network parameter needs to change (IP reassignment, board replacement), the operator connects directly to the board's UART and rewrites the relevant NVM fields. No network access required.
+Safety transitions always take priority over NVM service. If a transition occurs during a write, the implementation must preserve either the previous valid record or the complete validated new record; partially written configuration must never become valid. The pre-FSM recovery mode provides UART access when invalid bootstrap data prevents normal firmware from reaching `IDLE` or `ERROR.run`; its entry mechanism is ICD-defined.
 
 ### R6: Main topology is host-managed, not board-reported
 
@@ -107,7 +104,7 @@ If a board is replaced, the replacement is configured with the same IP and board
 
 Every board has a dedicated Ethernet port on the same host network (direct or through switches). Ethernet control is host-centric: main does not command function boards over Ethernet, and function boards do not command each other.
 Armed communication supervision is keep_alive-lease based (ADR-003); protocol framing/cadence/timeout details are ICD-defined.
-Transport/session implementation (for example TCP vs UDP, client/server role per board, ports, framing, and reconnect/retry behavior) is ICD-defined and out of ADR scope.
+Except for the TCP sequencer-transfer requirement in R9, transport/session implementation (client/server role per board, ports, framing, and reconnect/retry behavior) is ICD-defined and out of ADR scope.
 
 **Speed requirements by board type:**
 
@@ -118,25 +115,22 @@ Transport/session implementation (for example TCP vs UDP, client/server role per
 
 This keeps the main board firmware simple and allows the remote host to address each board directly by IP for control, diagnostics, and injected-fault F4 driver verification sequencing in `IDLE`/`ERROR.run` (ADR-003).
 
-**Security and trust model (normative):** The control network is assumed to be a physically and/or logically isolated instrument LAN. Any host with access to that network is trusted: commands (`arm`, `clear_error`, `set_injected_fault`, configuration writes, etc.) carry no per-command authentication, and protection is provided by network isolation, not by the protocol. Likewise, physical access to a board's UART port implies trust. This is a deliberate simplicity trade-off. The hardware interlock layer (OK bus, watchdogs, fail-safe paths, relay reset logic) protects against faults regardless of command origin, but it does not protect against well-formed hazardous commands (for example, arming with wrong operational parameters) — a trusted network peer can command anything an operator can. Network isolation is therefore a hard deployment requirement, not a convenience. Instruments that cannot guarantee isolation must add compensating controls at the ICD/deployment level; message-integrity checking (e.g., framing checksums) remains an ICD option for corruption protection, not authentication.
+**Security and trust model (normative):** The control network is assumed to be a physically and/or logically isolated instrument LAN. Any host with access to that network is trusted: commands (`arm`, `clear_error`, `set_injected_fault`, operational-configuration writes, etc.) carry no per-command authentication, and protection is provided by network isolation, not by the protocol. Likewise, physical access to a board's UART port implies trust. This is a deliberate simplicity trade-off. The hardware interlock layer (OK bus, watchdogs, fail-safe paths, relay reset logic) protects against faults regardless of command origin, but it does not protect against well-formed hazardous commands (for example, arming with wrong operational parameters) — a trusted network peer can command anything an operator can. Network isolation is therefore a hard deployment requirement, not a convenience. Instruments that cannot guarantee isolation must add compensating controls at the ICD/deployment level; message-integrity checking (e.g., framing checksums) remains an ICD option for corruption protection, not authentication.
 
 ---
 
-### R8: NVM contents are split by configuration channel
+### R8: Persistent and operational configuration channels are separate
 
-UART is the bootstrap channel for the minimum parameters required to bring a board onto the network:
-
-| Parameter | Configured via |
+| Data or operation | Channel and storage |
 |---|---|
-| IP address | UART |
-| Ethernet port | UART |
-| Board type | UART |
-| MAC address | UART (or pre-programmed at manufacturing) |
-| All other parameters | Ethernet |
+| Persistent identity, bootstrap-network, and permitted factory data | UART to NVM |
+| Operational parameters | Ethernet to volatile active configuration, `IDLE` only |
+| Sequencer payload | Ethernet/TCP to volatile sequencer memory, `IDLE` only |
+| NVM readback and fallback diagnostics | UART |
 
-Additional NVM fields (calibration, bias defaults, clock settings, other operational data) are board-type specific. Their layout is defined per board type and documented in ICDs. These fields are configured/updated via Ethernet.
+Ethernet commands must never write NVM. Operational-configuration and sequencer command framing, parameter catalogs, memory addressing, transfer segmentation, and completion signaling are ICD-defined.
 
-This keeps UART minimal and stable for identity/bootstrap tasks. UART remains available for reconfiguration and fallback diagnostics; richer operational workflows stay on Ethernet.
+Each operational-configuration command must validate the proposed value and all affected board-specific safety constraints before atomically applying it. Invalid commands are rejected and leave the previous active values unchanged. The board therefore always retains a safe operational configuration; no configuration hash, completion transaction, or `operational_config_valid` flag is required. At arm, the main rejects locally unsafe conditions and each function board independently trips on any applicable local readiness or safety failure (ADR-003 R7).
 
 #### Board configuration lifecycle
 
@@ -148,68 +142,52 @@ sequenceDiagram
     participant Board as Board FPGA/SoC
     participant Eth as Host (Ethernet)
 
-    Note over Op,NVM: 1. Commissioning (once per board)
+    Note over Op,NVM: 1. Commissioning or service
     Op->>UART: Connect serial cable
-    UART->>NVM: Write IP, Port, Board Type, MAC
+    UART->>NVM: Write permitted persistent fields
     Op->>UART: Verify written values
-    Op->>UART: Disconnect cable
+    Note over UART,NVM: Writes allowed only in IDLE, ERROR.run,
+    Note over UART,NVM: or pre-FSM recovery mode; reset required
 
     Note over NVM,Board: 2. Bootstrap (START.boot)
-    Board->>NVM: Read ALL NVM parameters
-    Note over Board: Apply network config (IP/MAC)
-    Note over Board: Apply operational defaults (bias, clocks)
+    Board->>NVM: Read identity, network, factory data
     Note over Board: Bring up Ethernet
+    Note over Board: Load safe volatile defaults
+    Note over Board: Clear sequencer_ready
 
     Note over Board,Eth: 3. Operational (IDLE)
-    Eth->>Board: Override operational parameters (session-only)
-    Eth->>Board: Upload/restore sequencer when needed
-    Eth->>Board: Before each arm: attest_sequencer_hash(expected_hash)
-    Note over Board: Overrides do not persist to NVM
-    Note over Board: unless explicitly written
+    Eth->>Board: Write volatile operational parameters
+    Eth->>Board: Upload volatile sequencer where required
+    Eth->>Board: Mark sequencer ready after loading
+    Board-->>Eth: Accept safe values; reject invalid writes
+    Note over Board,NVM: Ethernet has no NVM write path
     Eth->>Board: arm (via main board)
 ```
 
 ---
 
-### R9: Sequencer hash is validated before every arm (including the first arm after boot)
+### R9: Sequencers are volatile and the host must mark them ready before arm
 
-Sequencer payloads are board-type specific (for example, video and clock boards need different patterns). To guarantee freshness at scale without adding a new intra-system bus, each arm cycle uses hash attestation over existing per-board Ethernet links.
+Sequencer payloads are board-type-specific and are loaded by the host over TCP into the board's defined volatile sequencer-memory window. They are never stored in configuration NVM. TCP supplies reliable ordered delivery; no sequencer hash or board-side content-completeness check is required.
 
-**Sequencer storage model:**
-
-- After a successful upload, the sequencer is held in **volatile memory** on the board. It persists as long as the board is powered.
-- A power cycle clears volatile sequencer state. After boot, sequencer state is `missing` until a complete payload is loaded and validated (from NVM restore or Ethernet upload).
-- Boards **may** explicitly save the sequencer to NVM on operator request. On next boot, the board may restore NVM bytes into volatile memory (consistent with R4) and use them for attestation.
-- NVM save is optional and not required for correct operation. At large board counts (100+), NVM persistence eliminates upload latency for sessions where the sequencer is unchanged.
-
-**Rules (Normative):**
-1. **Arm-attestation command:** Before every arm command — including the first arm after boot — the remote host must send `attest_sequencer_hash(expected_hash)` to each required function board while in `IDLE`. **Definition of *required*:** A "required" board is any function board that implements a sequencer and is actively needed for the current acquisition session. Boards without sequencers (e.g., static bias boards) are explicitly excluded from this attestation loop; their hardware readiness gate is passively tied off (see ADR-003 R7).
-2. **On-demand attestation:** On `attest_sequencer_hash(expected_hash)`, the board must compute `sequencer_hash` from the active volatile sequencer buffer at that moment. Using a cached hash as the attestation source is prohibited.
-3. **Attestation response contract:** The board response must be one of: `hash_match`, `hash_mismatch`, or `missing/invalid`. `hash_match` is allowed only when local payload is valid and computed hash equals `expected_hash`.
-4. **Payload validity gate:** Each board must maintain a `sequencer_valid` state. It is set only after complete payload receipt/restoration plus local validation (`board_type`, format/version, bounds). If `sequencer_valid == 0`, attestation must report `missing/invalid` and arm must be blocked for that board.
-5. **Dirty on write:** Any sequencer-buffer write attempt (upload start, partial transfer, maintenance write, DMA write path, etc.) must clear `sequencer_valid` until full payload validation succeeds.
-6. **Armed immutability:** The sequencer volatile buffer must be immutable while armed (`EN = 1`). All write paths (CPU, DMA, service command paths) must be blocked while armed.
-7. **Local trust only:** The board must compute hash from bytes physically stored in local memory. Host-provided hash values are never trusted as truth.
-8. **No additional management bus required:** Sequencer freshness is guaranteed over existing per-board Ethernet links; no extra main-to-board management bus is required.
-
-**Hash algorithm and command format:** The hash algorithm (for example SHA-256), payload framing, attestation request/response schema, and error codes are ICD-defined. Implementation runs in C on the board processor (soft-core or bare-metal) and must be lightweight enough to run without OS services or hardware acceleration.
-
-The exact host-side Ethernet orchestration sequence (polling boards, evaluating mismatches, and executing sequencer payload uploads) to satisfy this attestation gate is defined in the system ICD.
-
-**Cross-reference to FSM enforcement:** ADR-003 R7 enforces this per-arm flow with `sequencer_hash_valid_current_arm` on each function board. The flag is cleared on `IDLE` entry, set only by `hash_match` in `IDLE`, and cleared again immediately after EN-rise acceptance into `RUN.init`.
+**Rules (normative):**
+1. Each sequencer board maintains `sequencer_ready`: reset and every accepted memory write clear it; only an explicit host ready command in `IDLE` sets it. A partial transfer therefore remains not ready.
+2. The flag records only that the trusted host declared loading complete; it does not validate BRAM contents. A required sequencer board with `sequencer_ready == 0` on EN rise trips per ADR-003 R7.
+3. Sequencer-memory and ready commands are accepted only in `IDLE`; all write paths are blocked while armed. Boards without sequencers do not implement this gate.
+4. Old unused BRAM contents may remain. Logical addressing, transfer segmentation, ready-command framing, and execution length/termination are ICD or sequencer-engine scope.
 
 ---
 
 ## Decision
 
-*Resolved. Core bootstrap/configuration strategy (UART + NVM + host-driven Ethernet orchestration), board identity via MAC/IP (no slot-position NVM field), no intra-system Ethernet (R7), and per-arm sequencer hash attestation over per-board Ethernet (R9) are settled.*
+*Resolved. UART-only persistent bootstrap/identity configuration, host-driven volatile Ethernet operation, board identity via MAC/IP (no slot-position NVM field), no intra-system Ethernet (R7), and volatile TCP sequencer loading with a host-controlled readiness interlock (R9) are settled.*
 
 ---
 
 ## Consequences
 
-- Manufacturing and service workflows must provide physical UART access to every board for bootstrap configuration and recovery.
+- Manufacturing and service workflows must provide physical UART access to every board for persistent configuration and recovery.
 - The remote host software is responsible for topology verification and per-board reachability checks; this is not a main-board duty.
-- ICDs must define two clear configuration channels: UART for bootstrap identity/network fields, Ethernet for extended operational parameters.
-- ICDs must define the sequencer payload schema, validation rules, and host-side per-arm hash-attestation workflow.
+- ICDs must keep UART/NVM persistence separate from Ethernet volatile operational configuration.
+- ICDs must define operational-command validation and sequencer payload/transfer rules.
 - ICDs must define keep_alive supervision details used while armed (message framing, cadence, lease timeout, and jitter/debounce policy) per ADR-003.

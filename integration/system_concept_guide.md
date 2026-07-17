@@ -1,7 +1,7 @@
 # Modular Detector Controller Concept Guide
 
 - **Status:** Draft / Non-normative
-- **Last updated:** 2026-07-05
+- **Last updated:** 2026-07-17
 
 This guide explains the modular detector controller from first principles. It is intended for readers who need to understand the system before reading the detailed ADRs, ICDs, firmware design specs, or hardware design specs.
 
@@ -54,7 +54,7 @@ The most important distinction is **Not Ready vs Fault**:
 
 ## 3. The System in One Paragraph
 
-The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and utility-converter synchronization capability. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet and uses UART only for bootstrap configuration or fallback diagnostics.
+The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and utility-converter synchronization capability. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet; UART is the persistent identity/network configuration and fallback diagnostic path.
 
 The backplane also distributes common **utility voltages** (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most function boards do not need to generate the same common rails locally. `+12V_RAW` is still distributed for specialized board-local rails, such as detector high voltages.
 
@@ -112,23 +112,7 @@ There are four ideas that make the rest of the documents easier to read:
 
 ---
 
-## 6. Physical View
-
-Conceptually, the system has these pieces:
-
-| Piece | Role |
-|---|---|
-| Main board | System coordinator. Drives `EN`, `CLEAR`, `SYNC`, `CLOCK`, and `LOOP_OUT`; monitors `OK` and `LOOP_IN`; provides utility DC-DC sync capability (ADR-005; use is instrument-selectable). |
-| Function boards | Detector-specific boards such as video, bias, clock, or bridge boards. They run sequencers, drive outputs, monitor local faults, and enforce arm readiness. |
-| Backplane | Carries shared safety/control signals, point-to-point clock/sync distribution, `+12V_RAW`, and common utility voltages. |
-| Remote host | Owns topology, sends Ethernet commands, uploads sequencers, performs hash attestation, polls diagnostics, and initiates recovery. |
-| UART port | Per-board bootstrap and fallback path. Used when Ethernet is not configured or unavailable. |
-
-The main board is not a central computer that commands every function board internally. The host talks to each board over that board's own Ethernet port.
-
----
-
-## 7. Host vs Main Board Responsibility
+## 6. Host vs Main Board Responsibility
 
 A common first misunderstanding is to treat the main board as the controller for all function boards. In this architecture, the **remote host** is the orchestration controller. The **main board** is a hardware coordinator and gateway for shared backplane signals.
 
@@ -151,7 +135,7 @@ The host should make a good decision before sending `arm`. Function boards still
 
 ---
 
-## 8. Signal Vocabulary
+## 7. Signal Vocabulary
 
 These are the system-level signals that appear throughout the ADRs.
 
@@ -177,7 +161,7 @@ The common backplane utility voltages are not state-machine signals. They are po
 
 ---
 
-## 9. OK Bus and Diagnostics
+## 8. OK Bus and Diagnostics
 
 The `OK` bus is a shared hardware fault line, not a communication protocol.
 
@@ -202,7 +186,7 @@ Diagnostic signals such as `fault_vector` (including its S1 supervision-timeout 
 
 ---
 
-## 10. Normal Operation Story
+## 9. Normal Operation Story
 
 The normal path is:
 
@@ -232,7 +216,7 @@ stateDiagram-v2
 
 ### START.boot
 
-Each board powers up using its own local management clock. It reads NVM, applies network configuration, applies operational defaults, and brings up Ethernet. During this phase, the shared `OK` bus may legitimately be LOW because boards are still booting.
+Each board powers up using its own local management clock. It reads persistent identity, network, and required factory data from NVM, brings up Ethernet, initializes operational parameters to safe firmware defaults, and clears `sequencer_ready`. During this phase, the shared `OK` bus may legitimately be LOW because boards are still booting.
 
 ### START.wait
 
@@ -249,17 +233,16 @@ If those checks do not pass within the defined deadlines, the board enters `ERRO
 
 Before every arm, the host should:
 
-1. Send pre-arm `SYNC` through the main board.
-2. Wait for `local_sync_ready` on boards that require local synchronization readiness.
-3. Attest sequencer hashes on required function boards.
-4. Confirm function-board readiness.
-5. Send `arm` to the main board.
+1. Confirm board readiness and `sequencer_ready` on sequencer boards.
+2. Send pre-arm `SYNC` through the main board.
+3. Wait for `local_sync_ready` on boards that require local synchronization readiness.
+4. Send `arm` to the main board.
 
 The main board checks its own readiness before asserting `EN`.
 
 ### RUN
 
-When `EN` rises, function boards independently evaluate their local arm gates. If readiness is valid, they enter `RUN.init`, then `RUN.wait`, then respond to `SYNC` edges for acquisition.
+When `EN` rises, function boards independently evaluate their local arm gates. If the checks pass, they enter `RUN.init`, then `RUN.wait`, then respond to `SYNC` edges for acquisition.
 
 If `OK` drops during any armed state, the system transitions to `ERROR.run`.
 
@@ -269,35 +252,17 @@ The host sends `disarm` to the main board. The main board drops `EN`. Function b
 
 ---
 
-## 11. Sequencer Hash Routine
+## 10. Sequencer Loading and Readiness
 
-Some function boards execute a **sequencer**: a programmed timing pattern that drives detector-facing signals during acquisition. Before arming, the host must know that each required sequencer board has the correct program loaded locally.
+Some function boards execute a **sequencer**: a programmed timing pattern that drives detector-facing signals during acquisition. After each reset, the host loads the required sequencer over TCP while the board is in `IDLE`.
 
-The hash routine is the freshness check for that program.
+Reset and every sequencer-memory write clear `sequencer_ready`. After finishing all intended writes, the host sends a separate ready command in `IDLE` to set it. The flag records only that the trusted host declared loading complete; it does not validate BRAM contents. A sequencer board enforces the flag when `EN` rises and trips the interlock if it is clear.
 
-Conceptually:
-
-1. The host knows the expected sequencer payload for the next acquisition.
-2. The host computes, or already has, the expected hash for that payload.
-3. While the system is in `IDLE`, the host asks each required sequencer board to attest its active sequencer hash.
-4. Each board computes the hash from the bytes actually stored in its local volatile sequencer buffer.
-5. The board replies with one of three conceptual results:
-
-| Result | Meaning |
-|---|---|
-| `hash_match` | The board has a valid local sequencer and its computed hash matches the expected hash. |
-| `hash_mismatch` | The board has a sequencer, but it is not the expected one. The host must reload or correct it before arming. |
-| `missing/invalid` | The board has no valid sequencer payload. The host must upload or restore one before arming. |
-
-The important safety idea is that the board does **not** trust the host's hash as proof. The board computes its own hash from its own local memory at the time of the request. This catches stale, missing, partial, corrupted, or wrong-board sequencer payloads.
-
-After a board returns `hash_match` in `IDLE`, it sets a local one-arm-use readiness token: `sequencer_hash_valid_current_arm`. When `EN` rises, the function board checks that token together with other readiness conditions. If the token is missing on a required sequencer board, the board treats the arm attempt as an interlock violation and trips the system.
-
-The token is consumed on arm entry, so the next arm requires a fresh attestation cycle. The exact hash algorithm, command format, payload framing, and error codes belong in the ICD.
+Sequencer storage is volatile, and Ethernet has no path to configuration NVM. Transfer framing, logical memory addressing, single-versus-segmented upload, ready-command details, and execution termination belong in the ICD; no hash-attestation exchange is required.
 
 ---
 
-## 12. Keep Alive Supervision
+## 11. Keep Alive Supervision
 
 While armed, each board must continue receiving valid host `keep_alive` messages. This is a supervision lease: the host periodically proves that it is still alive and still intentionally supervising the armed system.
 
@@ -317,7 +282,7 @@ The keep_alive message format, cadence, timeout, and jitter policy belong in the
 
 ---
 
-## 13. Fault Story
+## 12. Fault Story
 
 Faults are intentionally handled faster than normal arming.
 
@@ -337,7 +302,7 @@ The system does not need to classify the root cause before becoming safe. Classi
 
 ---
 
-## 14. Relay Safety Path
+## 13. Relay Safety Path
 
 Function-board relays are the hardware boundary between "safe/disarmed" and "armed detector-facing drive." The important concept is that relay cutoff does not rely only on the FPGA state machine continuing to run correctly.
 
@@ -357,7 +322,7 @@ Complete board power loss is also safe because relays are normally open and ener
 
 ---
 
-## 15. Recovery Story
+## 14. Recovery Story
 
 The fault recovery path is:
 
@@ -381,21 +346,21 @@ There is intentionally no direct `ERROR -> IDLE` shortcut.
 
 ---
 
-## 16. Configuration Story
+## 15. Configuration Story
 
 Configuration is split by purpose:
 
 | Channel | Purpose |
 |---|---|
-| UART | Bootstrap identity and fallback diagnostics. Used for IP, port, board type, MAC, and recovery when Ethernet is unavailable. |
-| NVM | Persistent per-board configuration storage. Read during `START.boot`. |
-| Ethernet | Normal operation: commands, telemetry, sequencer upload, hash attestation, keep_alive, diagnostics, and operational parameter overrides. |
+| UART | Persistent identity/network configuration, permitted factory-data service, and fallback diagnostics. NVM writes follow the ADR-002 state allowlist. |
+| NVM | Bootstrap identity, network, and required factory data. Read during `START.boot`; never written by Ethernet. |
+| Ethernet | Volatile operational configuration and sequencer loading in `IDLE`, plus normal commands, telemetry, keep_alive, and diagnostics. |
 
 The host owns the topology map. Boards identify themselves by network identity and hardware identity, but they do not report their physical slot as the authoritative source.
 
 ---
 
-## 17. Clock and Sync Story
+## 16. Clock and Sync Story
 
 The main board distributes a full-rate 100 MHz `CLOCK` to every function board using point-to-point LVDS. Function boards use this clock directly for sequencer timing and derive lower-frequency clocks by digital division.
 
@@ -418,7 +383,7 @@ Function boards also have an independent local management clock. The FSM, safety
 
 ---
 
-## 18. Two Clock Domains
+## 17. Two Clock Domains
 
 Each board has two important timing families.
 
@@ -433,7 +398,7 @@ This distinction explains why the system can safely treat missing distributed `C
 
 ---
 
-## 19. Injected Fault and F4 Verification
+## 18. Injected Fault and F4 Verification
 
 The system includes maintenance commands that intentionally force a board to pull `OK` LOW. This may seem strange at first, but it is how the system proves that a board's fault-output path can actually trip the shared `OK` bus.
 
@@ -452,14 +417,14 @@ There is also a watchdog-path test where the board deliberately stops watchdog p
 
 ---
 
-## 20. Reading the Detailed Documents
+## 19. Reading the Detailed Documents
 
 Use this guide to understand the system shape, then use the detailed documents for authority:
 
 | Need | Read |
 |---|---|
 | Fault taxonomy, `OK` bus behavior, watchdogs, fail-safe paths | `decisions/ADR-001_presence_health_detection.md` |
-| UART/NVM/Ethernet configuration model, topology ownership, sequencer hash attestation | `decisions/ADR-002_backplane_configuration_identification.md` |
+| UART/NVM/Ethernet configuration model, topology ownership, sequencer loading | `decisions/ADR-002_backplane_configuration_identification.md` |
 | FSM states, signal semantics, transition guards, timing constants, relay logic | `decisions/ADR-003_state_machine_definition.md` |
 | 100 MHz clock distribution, SYNC behavior, optional local-converter divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
 | Backplane utility voltages, `+12V_RAW`, 2 MHz utility switching, sync capability, module filtering, and connector zoning | `decisions/ADR-005_backplane_utility_voltages.md` |
@@ -470,7 +435,7 @@ Use this guide to understand the system shape, then use the detailed documents f
 
 ---
 
-## 21. Terms That Appear Later
+## 20. Terms That Appear Later
 
 These terms are useful when moving from this guide into the ADRs.
 
@@ -489,4 +454,4 @@ These terms are useful when moving from this guide into the ADRs.
 | Local management clock | Independent board-local clock used for safety FSM, fault detection, and management logic. |
 | Distributed `CLOCK` | Main-board 100 MHz timing clock sent to function boards for sequencer and timing-derived functions. |
 | `local_sync_ready` | Local readiness flag set after IDLE pre-arm `SYNC` and settle time on boards that require local synchronization readiness. |
-| `sequencer_hash_valid_current_arm` | One-arm-use readiness token set by successful sequencer hash attestation in `IDLE`. |
+| `sequencer_ready` | Host-controlled completion interlock; cleared by reset or any sequencer-memory write and set by an explicit ready command in `IDLE`. |

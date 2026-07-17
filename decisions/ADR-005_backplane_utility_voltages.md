@@ -1,7 +1,7 @@
 # ADR-005: Backplane Utility Voltage Distribution
 
 **Status:** Resolved
-**Last updated:** 2026-07-05
+**Last updated:** 2026-07-17
 
 ---
 
@@ -49,7 +49,7 @@ These outputs reserve synchronization capability for up to five independent swit
 
 Each output shall generate 2 MHz from the main board's 100 MHz timing source and support an independently configurable phase offset with 10 ns resolution over the 500 ns switching period. The main-board connector pins, FPGA or timing-logic implementation, and output buffering are mandatory even when a particular instrument elects not to synchronize its utility converters.
 
-Use of external synchronization by a utility converter is optional when fixed-frequency unsynchronized operation satisfies the instrument's conducted-noise, EMC, and detector-performance requirements. When synchronization is used, all channels may use the same phase or an instrument-defined phase plan may offset them to reduce coincident input-current transients. No universal phase plan is imposed by this ADR because the useful offsets depend on converter topology and load. Phase settings and the output-enable mask are persistent main-board configuration. They may be changed only while the system is unarmed and shall remain fixed throughout acquisition; implementations shall prevent malformed or shortened sync periods when applying a new setting.
+Use of external synchronization by a utility converter is optional when fixed-frequency unsynchronized operation satisfies the instrument's conducted-noise, EMC, and detector-performance requirements. When synchronization is used, all channels may use the same phase or an instrument-defined phase plan may offset them to reduce coincident input-current transients. No universal phase plan is imposed by this ADR because the useful offsets depend on converter topology and load. Phase settings and the output-enable mask are volatile main-board operational configuration supplied by the host in `IDLE` per ADR-002. They shall remain fixed throughout acquisition; implementations shall prevent malformed or shortened sync periods when applying a new setting.
 
 The LVDS links shall be routed point-to-point and terminated at the common-power destination. LVDS receivers shall be placed in the common-power domain, with only short local single-ended connections from the receivers to converter synchronization inputs. Receiver behavior for an absent, disconnected, or unpowered transmitter must be deterministic and must permit the converter's defined free-running fallback. Differential impedance, termination value, electrical levels, intra-pair skew, channel-to-channel skew, return-pin allocation, and receiver/component selection are ICD/design-package scope.
 
