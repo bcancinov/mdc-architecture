@@ -158,8 +158,7 @@ sequenceDiagram
     Eth->>Board: Write volatile operational parameters
     Eth->>Board: Upload volatile sequencer where required
     Eth->>Board: Mark sequencer ready after loading
-    Board-->>Eth: Accept safe values; reject invalid writes
-    Note over Board,NVM: Ethernet has no NVM write path
+    Board-->>Eth: Accept or reject operational write
     Eth->>Board: arm (via main board)
 ```
 
