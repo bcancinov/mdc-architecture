@@ -146,8 +146,7 @@ sequenceDiagram
     Op->>UART: Connect serial cable
     UART->>NVM: Write permitted persistent fields
     Op->>UART: Verify written values
-    Note over UART,NVM: Writes allowed only in IDLE, ERROR.run,
-    Note over UART,NVM: or pre-FSM recovery mode; reset required
+    Note over UART,NVM: NVM writes require IDLE, ERROR.run, or pre-FSM recovery mode and take effect after reset
 
     Note over NVM,Board: 2. Bootstrap (START.boot)
     Board->>NVM: Read identity, network, factory data
