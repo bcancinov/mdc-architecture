@@ -1,13 +1,13 @@
 ﻿# ADR-002: Backplane Board Identification and Configuration Strategy
 
 **Status:** Resolved
-**Last updated:** 2026-07-17
+**Last updated:** 2026-08-14
 
 ---
 
 ## Context
 
-Every board (main and function) has its own Ethernet port and must be uniquely identifiable on the network. Slot mapping is maintained by the host from commissioning records; boards do not report slot position at runtime.
+Every board (main and function) has its own Ethernet port and must be uniquely identifiable on the network. Physical slot position is not operationally significant and is not reported by boards at runtime. The host instead needs a reliable way to associate a logical role with the intended physical board and network endpoint.
 
 This is a configuration and identification concern, distinct from fault detection (covered in ADR-001).
 
@@ -90,20 +90,26 @@ Non-disruptive UART diagnostics and NVM reads may be accepted in any FSM state. 
 
 Safety transitions always take priority over NVM service. If a transition occurs during a write, the implementation must preserve either the previous valid record or the complete validated new record; partially written configuration must never become valid. The pre-FSM recovery mode provides UART access when invalid bootstrap data prevents normal firmware from reaching `IDLE` or `ERROR.run`; its entry mechanism is ICD-defined.
 
-### R6: Main topology is host-managed, not board-reported
+### R6: Board inventory and identity are host-managed
 
-Boards are identified by MAC (hardware identity) and IP (network identity). The host owns the authoritative topology map (`IP -> board type -> expected slot`). Boards do not report slot position; slot assignment is a host-side commissioning artifact, not an NVM field.
+Boards are identified by unique serial ID and MAC address (hardware identity), board type/revision (capability identity), and IP address (network endpoint). The host owns the authoritative inventory mapping:
 
-Topology verification is performed by the remote host by polling expected board IPs. The main board uses backplane electrical signals only (EN, OK, LOOP) and does not perform Ethernet discovery of function boards.
+```text
+logical role <-> board type/revision <-> IP <-> MAC/serial
+```
 
-The main board drives `CLOCK` and `SYNC` to all slots regardless of occupancy — empty slots have no electrical effect on signal integrity (ADR-004 R1), so no per-slot enable/disable is needed and the main board requires no topology knowledge.
+Physical slot is not an authoritative part of this mapping and is not an NVM field.
 
-If a board is replaced, the replacement is configured with the same IP and board type via UART and the host topology map remains valid without changes.
+At commissioning and startup, the remote host polls each expected IP and verifies the returned board type, revision, MAC, and serial ID against the inventory. Reachability at the expected IP is insufficient if the identity does not match. The main board uses backplane electrical signals only (EN, OK, LOOP) and does not perform Ethernet discovery of function boards.
+
+The main board drives `CLOCK` and `SYNC` to all slots regardless of occupancy — empty slots have no electrical effect on signal integrity (ADR-004 R1), so no per-slot enable/disable or board-inventory knowledge is needed on main.
+
+If a board is replaced, its persistent network settings are commissioned through UART and the host inventory is explicitly updated for the replacement MAC/serial and revision. An optional `identify_board` command may flash a visible board LED so an operator can locate the physical unit associated with a host inventory record. Ethernet discovery may be added as a commissioning convenience, but UART remains the recovery path and the inventory remains authoritative.
 
 ### R7: Every board has a dedicated Ethernet port connected to the host network
 
 Every board has a dedicated Ethernet port on the same host network (direct or through switches). Ethernet control is host-centric: main does not command function boards over Ethernet, and function boards do not command each other.
-Armed communication supervision is keep_alive-lease based (ADR-003); protocol framing/cadence/timeout details are ICD-defined.
+Armed communication uses the protocol-neutral host-supervision rule in ADR-003. The qualifying interaction, returned response, cadence, retry policy, and timeout are ICD-defined; a dedicated heartbeat command is not architecturally required.
 Except for the TCP sequencer-transfer requirement in R9, transport/session implementation (client/server role per board, ports, framing, and reconnect/retry behavior) is ICD-defined and out of ADR scope.
 
 **Speed requirements by board type:**
@@ -178,14 +184,14 @@ Sequencer payloads are board-type-specific and are loaded by the host over TCP i
 
 ## Decision
 
-*Resolved. UART-only persistent bootstrap/identity configuration, host-driven volatile Ethernet operation, board identity via MAC/IP (no slot-position NVM field), no intra-system Ethernet (R7), and volatile TCP sequencer loading with a host-controlled readiness interlock (R9) are settled.*
+*Resolved. UART-only persistent bootstrap/identity configuration, host-driven volatile Ethernet operation, host inventory based on logical role plus board type/IP/MAC/serial rather than slot position, no intra-system Ethernet (R7), and volatile TCP sequencer loading with a host-controlled readiness interlock (R9) are settled.*
 
 ---
 
 ## Consequences
 
 - Manufacturing and service workflows must provide physical UART access to every board for persistent configuration and recovery.
-- The remote host software is responsible for topology verification and per-board reachability checks; this is not a main-board duty.
+- The remote host software is responsible for inventory/identity verification and per-board reachability checks; this is not a main-board duty.
 - ICDs must keep UART/NVM persistence separate from Ethernet volatile operational configuration.
 - ICDs must define operational-command validation and sequencer payload/transfer rules.
-- ICDs must define keep_alive supervision details used while armed (message framing, cadence, lease timeout, and jitter/debounce policy) per ADR-003.
+- ICDs must define the qualifying host-supervision interactions, returned response, cadence, retry policy, and timeout used while armed per ADR-003.

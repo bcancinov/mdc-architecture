@@ -1,13 +1,15 @@
 # ADR-005: Backplane Utility Voltage Distribution
 
 **Status:** Resolved
-**Last updated:** 2026-07-17
+**Last updated:** 2026-08-14
 
 ---
 
 ## Context
 
-Most modular boards need the same low-voltage digital and analog rails. If every board generates these common rails locally from the distributed `+12V_RAW` input, the system duplicates converter area, thermal load, layout effort, and switching-noise sources across the backplane.
+Most modular boards need the same analog utility rails and some low-power digital support circuitry benefits from a shared auxiliary rail. If every board generates these modest common loads locally from the distributed `+12V_RAW` input, the system duplicates converter area, thermal load, layout effort, and switching-noise sources across the backplane.
+
+Processor, FPGA, memory, and other high-current digital loads are different: distributing their power at 3.3 V would increase connector current and voltage drop, while their fast load transients and local point-of-load converters could conduct noise onto a shared rail. These loads therefore remain locally converted from `+12V_RAW`.
 
 Specialized boards may still need uncommon detector-specific voltages such as +40V, -40V, +100V, or -100V. Those rails are not common to all boards and should not be distributed as standard backplane resources.
 
@@ -19,15 +21,23 @@ The backplane/common-power domain provides a set of **utility voltages** to modu
 
 | Rail | Intended use |
 |---|---|
-| `+3.3V_DIG` | Digital loads only, such as FPGA/SoC/processor logic, management interfaces, and digital support ICs |
+| `+3.3V_DIG_AUX` | Low-power auxiliary digital loads, such as identification, monitoring, and modest management/support circuits |
 | `+6V_ANA` | Common positive low-voltage analog utility rail |
 | `-6V_ANA` | Common negative low-voltage analog utility rail |
 | `+16V_ANA` | Common positive analog utility rail |
 | `-16V_ANA` | Common negative analog utility rail |
 
-The existing `+12V_RAW` distribution remains available to each modular board. It is the preferred input for board-local specialized converters that generate non-common rails, for example high-voltage detector rails.
+The existing `+12V_RAW` distribution remains available to each modular board. It is the required input for board-local conversion that supplies processors, FPGAs, memory, and other high-current digital loads, and the preferred input for specialized converters that generate non-common rails such as high-voltage detector rails.
 
-Utility-voltage converters are generated centrally in the backplane/common-power domain, not independently on every function board. Function boards may add local protection, filtering, LDOs, or point-of-load regulation where needed, but should not regenerate these common utility voltages from `+12V_RAW` unless the board ICD/design spec justifies an exception.
+Utility-voltage converters are physically located on the backplane/common-power board, not on the main board and not independently on every function board. Function boards may add local protection, filtering, LDOs, or point-of-load regulation where needed, but should not regenerate these common utility voltages from `+12V_RAW` unless the board ICD/design spec justifies an exception. `+3.3V_DIG_AUX` is not a bulk processor/FPGA supply and shall not be used as the input to high-current digital point-of-load conversion.
+
+## Utility-Rail Fault Protection and Diagnostics
+
+Each utility converter's compatible open-drain power-good/fault output shall connect directly to the shared `OK` bus. A converter fault therefore uses the same hardware interlock path as board-local faults and sends the system to `ERROR.run` without relying on the main processor or an individual telemetry link.
+
+Direct wire-AND connection is permitted only when every participating output is electrically compatible with the `OK` bus in its powered, unpowered, startup, shutdown, and fault states. The common-power design must verify voltage ratings, polarity, leakage, pull-up current, output behavior during loss of converter bias, and fault coverage. If a converter's native output cannot meet these conditions or does not supervise the required undervoltage/overvoltage cases, the backplane shall add a simple compatible hardware supervisor or open-drain interface for that rail.
+
+The main board shall measure the present utility-rail voltages and may measure rail currents for telemetry and root-cause diagnosis. These analog measurements are diagnostic only and do not replace the direct PGOOD-to-`OK` path. Individual PGOOD copies shall not be routed to the main board: avoiding those copies removes the need for a buffer or isolation channel for every converter. Consequently, a very brief self-clearing event may be reported only as a generic common-power trip unless the common-power implementation retains additional local evidence.
 
 ---
 
@@ -97,10 +107,10 @@ The intended relationship and bonding between analog and digital circuit returns
 
 ## Constraints
 
-1. `+3.3V_DIG` is for digital use only. Analog circuits must use appropriate analog utility rails or local analog regulation/filtering.
-2. Utility-voltage current budgets, tolerances, sequencing, ripple/noise limits, connector pins, protection, inrush behavior, and telemetry are ICD/design-package scope.
+1. `+3.3V_DIG_AUX` is a current-limited auxiliary digital rail, not a processor, FPGA, memory, or other high-current load rail. Its maximum per-slot and aggregate current shall be defined by the ICD. Analog circuits must use appropriate analog utility rails or local analog regulation/filtering.
+2. Utility-voltage current budgets, tolerances, sequencing, ripple/noise limits, connector pins, protection, inrush behavior, and telemetry are ICD/design-package scope. The backplane must protect each rail and supervise all rail conditions designated as safety relevant.
 3. Backplane utility voltages do not replace the need for board-local specialized rails where the voltage is not common across modular boards.
-4. Safety-critical watchdog and fail-safe `OK` paths must remain independent of the FPGA/processor digital rail as required by ADR-001. Supplying the FPGA from `+3.3V_DIG` does not by itself make `+3.3V_DIG` an acceptable independent watchdog/fail-safe supply.
+4. Safety-critical watchdog and fail-safe `OK` paths must remain independent of processor/FPGA rails and of `+3.3V_DIG_AUX` as required by ADR-001. The auxiliary rail is not, by itself, an acceptable independent watchdog/fail-safe supply.
 5. A board-local converter that generates a specialized rail from `+12V_RAW` may optionally synchronize its switching frequency according to ADR-004, but that is a board-specific design choice justified in the board ICD/design spec.
 
 ---
@@ -108,7 +118,8 @@ The intended relationship and bonding between analog and digital circuit returns
 ## Consequences
 
 - Common rail generation moves out of most function-board designs, reducing duplicated converter circuitry and aggregate switching-noise sources.
-- The backplane/common-power design becomes responsible for utility-rail capacity, protection, 2 MHz fixed-frequency operation, output filtering, synchronization receivers, and optional phase-interleaved operation.
+- The backplane/common-power design becomes responsible for utility-rail capacity, protection, PGOOD-to-`OK` compatibility, 2 MHz fixed-frequency operation, output filtering, synchronization receivers, and optional phase-interleaved operation.
+- Common-rail faults produce a fast shared interlock trip, while main-board analog measurements provide rail-level diagnostic context without separate PGOOD inputs.
 - The main-board connector and timing logic reserve five independently phase-capable LVDS synchronization outputs even when an instrument does not use them.
 - Function-board ICDs must list which utility rails they consume and the local regulation/filtering used for noise-sensitive analog loads.
 - Backplane and connector designs must preserve analog/digital power zoning and intentional return-current paths.

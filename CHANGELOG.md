@@ -2,6 +2,16 @@
 
 This file contains repository changes before the latest summary in `README.md`.
 
+## 2026-08-14 — Timing, supervision, power, and identity refinement
+
+- Renamed the shared digital utility rail to `+3.3V_DIG_AUX` and limited it to low-power auxiliary digital loads.
+- Required processors, FPGAs, memory, and other high-current digital loads to use board-local conversion from `+12V_RAW`, avoiding excessive connector current and conducted-noise coupling through a shared 3.3 V rail.
+- Defined acquisition `SYNC` capture in the 100 MHz timing domain with a separate CDC-safe management observation; management/processor clocks remain independent and acquisition never resumes automatically after clock loss.
+- Removed universal jitter and fault-latency numbers in favor of application timing verification and hardware interlock propagation without intentional software delay.
+- Connected compatible backplane utility-converter PGOOD outputs directly to `OK`; main-board analog rail measurements provide diagnosis without individual buffered PGOOD copies.
+- Replaced slot topology with a host-owned logical-role/IP/MAC/serial inventory and made armed host supervision protocol-neutral.
+- Required each board to monitor its local safety-support supply with an open-drain supervisor and isolated hold-up energy so `OK` asserts before that safety circuitry loses power.
+
 ## 2026-07-05 — Architectural simplification: ERROR.init merged into ERROR.run
 
 - `ERROR.init` was a vacuous pass-through: its entry actions are automatic consequences of leaving RUN/IDLE. All fault transitions now target `ERROR.run` directly; the `ERROR.clear` failure path returns there.
@@ -20,12 +30,12 @@ This file contains repository changes before the latest summary in `README.md`.
 
 ## 2026-07-05 — Architectural simplification: unified S1 supervision mechanism
 
-- Armed keep_alive timeout S1 now sets a `fault_vector` bit and uses the standard trip/clear path; the separate supervision latch was removed.
+- Armed host-supervision timeout S1 now sets a `fault_vector` bit and uses the standard trip/clear path; the separate supervision latch was removed.
 - The FPGA `OK` driver has three internal sources: `local_trip_summary`, `boot_pulldown_active`, and `injected_fault`.
 
 ## 2026-07-05 — Gap closure: data path, trust model, and interface hardening
 
-- Added ADR-006: image data uses each video board's Ethernet port; overrun is a data-quality event; keep_alive is isolated from bulk-data congestion.
+- Added ADR-006: image data uses each video board's Ethernet port; overrun is a data-quality event; host supervision remains effective during bulk-data transfer.
 - Added the ADR-002 isolated-instrument-LAN trust model.
 - Hardened ADR-003 `CLEAR`, synchronized-input, safe-bias, and START.wait diagnostic rules.
 - Recorded the ADR-001 no-hot-swap stance and added planned-document tracking.

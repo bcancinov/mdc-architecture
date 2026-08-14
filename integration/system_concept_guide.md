@@ -1,7 +1,7 @@
 # Modular Detector Controller Concept Guide
 
 - **Status:** Draft / Non-normative
-- **Last updated:** 2026-07-17
+- **Last updated:** 2026-08-14
 
 This guide explains the modular detector controller from first principles. It is intended for readers who need to understand the system before reading the detailed ADRs, ICDs, firmware design specs, or hardware design specs.
 
@@ -56,7 +56,7 @@ The most important distinction is **Not Ready vs Fault**:
 
 The controller is a backplane-based system with one **main board** and multiple **function boards**. The main board coordinates system-level signals such as arm/disarm, recovery, clock, sync, loop monitoring, and utility-converter synchronization capability. Function boards do the detector-specific work: generating clocks, applying bias, running sequencers, driving detector pins, and acquiring data. A remote host controls the system over Ethernet; UART is the persistent identity/network configuration and fallback diagnostic path.
 
-The backplane also distributes common **utility voltages** (`+3.3V_DIG`, `+/-6V_ANA`, `+/-16V_ANA`) so most function boards do not need to generate the same common rails locally. `+12V_RAW` is still distributed for specialized board-local rails, such as detector high voltages.
+The backplane generates and distributes common **utility voltages** (`+3.3V_DIG_AUX`, `+/-6V_ANA`, `+/-16V_ANA`) for modest shared loads. `+3.3V_DIG_AUX` serves low-power auxiliary digital functions only. Processors, FPGAs, memory, and other high-current digital loads use board-local conversion from `+12V_RAW`; the raw rail also supplies specialized local rails such as detector high voltages. Compatible converter PGOOD signals contribute directly to `OK`, while the main board measures rail voltages and optional currents for diagnosis.
 
 The architecture is designed around one safety rule:
 
@@ -72,7 +72,7 @@ The system is easier to understand if you separate three layers:
 
 ```mermaid
 flowchart TB
-    HOST["Remote Host\nEthernet orchestration, topology,\nsequencer upload, diagnostics"]
+    HOST["Remote Host\nEthernet orchestration, inventory,\nsequencer upload, diagnostics"]
     MAIN["Main Board\nEN, CLEAR, CLOCK, SYNC,\nLOOP monitoring"]
     BACKPLANE["Backplane\nShared safety/control signals\nPoint-to-point CLOCK/SYNC\nUtility voltages"]
     FB1["Function Board\nVideo / Bias / Clock / Bridge"]
@@ -118,7 +118,7 @@ A common first misunderstanding is to treat the main board as the controller for
 
 | Responsibility | Remote host | Main board |
 |---|---|---|
-| Own topology map | Yes | No |
+| Own board inventory/identity map | Yes | No |
 | Poll each board over Ethernet | Yes | No |
 | Upload sequencers | Yes | No |
 | Check function-board readiness before arm | Yes | No direct backplane feedback |
@@ -145,7 +145,7 @@ These are the system-level signals that appear throughout the ADRs.
 | `EN` | Global arm signal | Driven by the main board. HIGH means the system is armed. LOW means safe/disarmed. |
 | `CLEAR` | Recovery command signal | Driven by the main board during fault recovery. Function boards use it to enter local clear/recheck logic. |
 | `CLOCK` | 100 MHz sequencer clock | Distributed by the main board over point-to-point LVDS. Used by function boards for timing-sensitive work. |
-| `SYNC` | Synchronized timing edge | Used in `IDLE` for pre-arm divider phase reset and in `RUN` to start/stop acquisition windows. |
+| `SYNC` | Synchronized timing edge | In `IDLE`, optionally phase-resets a controlled local-converter divider. In `RUN`, its timing-domain capture starts/stops acquisition; a CDC-safe observation updates management state. |
 | `LOOP_OUT` / `LOOP_IN` | Physical continuity loop | A passive loop through slots and cables. If the loop breaks, the main board converts that into an `OK` fault. |
 
 The detailed behavioral source of truth for these signals is ADR-003.
@@ -154,10 +154,10 @@ The common backplane utility voltages are not state-machine signals. They are po
 
 | Power resource | Plain meaning |
 |---|---|
-| `+3.3V_DIG` | Common digital utility rail for logic and management loads only. |
+| `+3.3V_DIG_AUX` | Current-limited auxiliary rail for low-power identification, monitoring, management, and digital support loads; not for processors, FPGAs, memory, or high-current point-of-load conversion. |
 | `+6V_ANA` / `-6V_ANA` | Common low-voltage analog utility rails. |
 | `+16V_ANA` / `-16V_ANA` | Common analog utility rails. |
-| `+12V_RAW` | Distributed raw/input rail for specialized board-local converters and independent safety support paths. |
+| `+12V_RAW` | Primary bulk-power input for local processor/FPGA conversion, specialized board-local converters, and independent safety support paths. |
 
 ---
 
@@ -168,7 +168,7 @@ The `OK` bus is a shared hardware fault line, not a communication protocol.
 Conceptually:
 
 - `OK = 1` means no board is currently pulling the shared fault bus LOW.
-- `OK = 0` means at least one board, watchdog path, fail-safe path, or main-board loop conversion has asserted a fault.
+- `OK = 0` means at least one board, watchdog path, fail-safe path, safety-supply supervisor, qualified backplane PGOOD source, or main-board loop conversion has asserted a fault.
 - `OK` does **not** identify which board failed.
 - `OK` does **not** describe the root cause.
 
@@ -182,7 +182,7 @@ flowchart LR
     DIAG --> ROOT["Root cause identified"]
 ```
 
-Diagnostic signals such as `fault_vector` (including its S1 supervision-timeout bit), `F5_latch`, and `WD_latch` exist for the slower explanation step. They should not be confused with the immediate safety trip itself.
+Diagnostic information such as `fault_vector`, retained clock-loss evidence, and retained watchdog-activation evidence exists for the slower explanation step. Its exact register naming is implementation-specific and should not be confused with the hardware safety trip itself.
 
 ---
 
@@ -262,23 +262,23 @@ Sequencer storage is volatile, and Ethernet has no path to configuration NVM. Tr
 
 ---
 
-## 11. Keep Alive Supervision
+## 11. Host Supervision
 
-While armed, each board must continue receiving valid host `keep_alive` messages. This is a supervision lease: the host periodically proves that it is still alive and still intentionally supervising the armed system.
+While armed, each board must continue completing valid host interactions. The exact interaction is deliberately left to the board protocol: it may be a telemetry request, an explicit heartbeat, or an application-level data acknowledgement or credit.
 
 This matters because Ethernet loss while armed is not harmless. If the host disappears during acquisition, the system should not continue indefinitely in an armed state without supervision.
 
 Conceptually:
 
 1. The system enters `RUN` and `EN = 1`.
-2. Each board starts or continues an armed keep_alive lease timer.
-3. The host periodically sends a dedicated `keep_alive` command to each board.
-4. Each valid keep_alive refreshes that board's lease.
-5. If a board's lease expires while `EN = 1`, that board trips the system by pulling `OK` LOW.
+2. Each board starts or continues its armed host-supervision timer.
+3. The host completes an ICD-defined qualifying interaction with each board.
+4. The board returns an ICD-defined response, and the interaction refreshes its timer.
+5. If the timer expires while `EN = 1`, that board trips the system by pulling `OK` LOW.
 
 This event is called a **supervisory interlock event**, not a normal hardware fault. The physical response is the same (`OK = 0` and global transition to `ERROR`), but the root cause is loss of valid host supervision while armed.
 
-The keep_alive message format, cadence, timeout, and jitter policy belong in the ICD.
+Unsolicited board-to-host traffic alone does not prove host presence. The qualifying interaction, response, cadence, retry policy, and timeout belong in the ICD.
 
 ---
 
@@ -293,8 +293,10 @@ Examples:
 | A board detects over-current, over-temperature, PLL loss, or another local internal fault | That board pulls `OK` LOW. |
 | A board FPGA loses power or reset collapses | Fail-safe hardware pulls `OK` LOW if the independent watchdog/fail-safe supply is still present. |
 | A board logic path freezes | External watchdog eventually pulls `OK` LOW. |
+| A common backplane utility rail loses power-good | Its compatible open-drain PGOOD/supervisor pulls `OK` LOW; main-board analog measurements help identify the rail. |
 | A cable or slot continuity path breaks | Main board detects `LOOP_IN` drop and pulls `OK` LOW. |
-| Host keep_alive stops while armed | The timed-out board pulls `OK` LOW as a supervisory interlock event. |
+| Qualifying host interaction stops while armed | The timed-out board pulls `OK` LOW as a supervisory interlock event. |
+| A board's local safety-support supply collapses | Its held-up voltage supervisor pulls `OK` LOW before the safety circuitry loses operating power. |
 
 Once `OK` goes LOW, all boards see the same fault condition. Function-board relays are also protected by external reset-dominant hardware, so relay cutoff does not depend only on FPGA state progression.
 
@@ -318,7 +320,7 @@ This is another example of the design rule:
 - Closing relays is slow and gated.
 - Opening relays is fast and hardware-enforced.
 
-Complete board power loss is also safe because relays are normally open and energize-to-arm.
+Each board also monitors its local safety-support supply with a hardware supervisor powered by isolated hold-up energy. It pulls `OK` LOW before the watchdog/fail-safe supply collapses. Complete loss of power still de-energizes the normally-open relay, and physical removal also breaks the continuity loop.
 
 ---
 
@@ -354,9 +356,9 @@ Configuration is split by purpose:
 |---|---|
 | UART | Persistent identity/network configuration, permitted factory-data service, and fallback diagnostics. NVM writes follow the ADR-002 state allowlist. |
 | NVM | Bootstrap identity, network, and required factory data. Read during `START.boot`; never written by Ethernet. |
-| Ethernet | Volatile operational configuration and sequencer loading in `IDLE`, plus normal commands, telemetry, keep_alive, and diagnostics. |
+| Ethernet | Volatile operational configuration and sequencer loading in `IDLE`, plus normal commands, telemetry, qualifying host-supervision interactions, and diagnostics. |
 
-The host owns the topology map. Boards identify themselves by network identity and hardware identity, but they do not report their physical slot as the authoritative source.
+The host owns the board inventory, mapping logical role to expected board type/revision, IP, MAC, and serial ID. At startup it verifies identity as well as reachability. Physical slot is not authoritative; an optional identify command may flash a board LED to locate it.
 
 ---
 
@@ -364,12 +366,12 @@ The host owns the topology map. Boards identify themselves by network identity a
 
 The main board distributes a full-rate 100 MHz `CLOCK` to every function board using point-to-point LVDS. Function boards use this clock directly for sequencer timing and derive lower-frequency clocks by digital division.
 
-This avoids requiring every function board to multiply a low-frequency reference with a local PLL. It also supports the jitter target needed by demanding ADC timing modes.
+This avoids requiring every function board to multiply a low-frequency reference with a local PLL. End-to-end timing quality is verified against the selected ADC, analog front end, sequencer, and detector requirements.
 
 `SYNC` has two conceptual uses:
 
-1. In `IDLE`, `SYNC` resets watchdog timing dividers and any implemented synchronized local converter divider before arming.
-2. In `RUN`, `SYNC` starts and stops acquisition windows.
+1. In `IDLE`, `SYNC` may reset an optional phase-controlled local converter divider before arming. It does not reset the watchdog divider.
+2. In `RUN`, `SYNC` is captured directly in the 100 MHz timing domain to start and stop sequencers on defined edges; a separate CDC-safe copy is used for management state and telemetry.
 
 Common utility-voltage converters live in the backplane/common-power domain and operate at a nominal fixed 2 MHz during acquisition. The main board provides the utility-sync capability defined in ADR-005 so an instrument may synchronize and optionally phase-interleave its converter channels. The capability is always present; use of synchronization and the phase plan are instrument choices.
 
@@ -424,11 +426,11 @@ Use this guide to understand the system shape, then use the detailed documents f
 | Need | Read |
 |---|---|
 | Fault taxonomy, `OK` bus behavior, watchdogs, fail-safe paths | `decisions/ADR-001_presence_health_detection.md` |
-| UART/NVM/Ethernet configuration model, topology ownership, sequencer loading | `decisions/ADR-002_backplane_configuration_identification.md` |
+| UART/NVM/Ethernet configuration model, inventory ownership, sequencer loading | `decisions/ADR-002_backplane_configuration_identification.md` |
 | FSM states, signal semantics, transition guards, timing constants, relay logic | `decisions/ADR-003_state_machine_definition.md` |
 | 100 MHz clock distribution, SYNC behavior, optional local-converter divider alignment, management clock independence | `decisions/ADR-004_clock_sync_distribution.md` |
 | Backplane utility voltages, `+12V_RAW`, 2 MHz utility switching, sync capability, module filtering, and connector zoning | `decisions/ADR-005_backplane_utility_voltages.md` |
-| Acquisition data path, overrun policy, keep_alive/bulk-data independence | `decisions/ADR-006_acquisition_data_path.md` |
+| Acquisition data path, overrun policy, and host supervision during readout | `decisions/ADR-006_acquisition_data_path.md` |
 | Message schemas, electrical pinouts, command sequences | Future `interfaces/` ICDs |
 | RTL, schematics, pseudocode, component choices | Future `design/` specs |
 | Worked examples and bring-up procedures | Future `integration/` guides |
@@ -446,11 +448,11 @@ These terms are useful when moving from this guide into the ADRs.
 | `ok_fault` | Registered FPGA output that drives the local open-drain `OK` fault path. |
 | `boot_pulldown_active` | Startup latch that intentionally holds `OK` LOW until clock qualification succeeds. |
 | `injected_fault` | Host-authorized maintenance bit used to test the `OK` driver path. |
-| `fault_vector[S1]` | Sticky `fault_vector` bit set when armed keep_alive supervision times out. |
-| `keep_alive` | Dedicated host heartbeat command that refreshes a board's armed supervision lease. |
-| `F5_latch` | Diagnostic indication of local clock/pet-path fault detection. |
+| `fault_vector[S1]` | Sticky `fault_vector` bit set when armed host supervision times out. |
+| Host-supervision interaction | ICD-defined request/response activity that proves the host and board can still communicate while armed. |
+| Clock-loss evidence | Retained diagnostic indication that the role-appropriate timing clock stopped. |
 | F4 | Failure mode where a board's `OK` driver path is damaged or stuck open. |
-| `WD_latch` | Diagnostic observer latch showing that the external watchdog tripped. |
+| Watchdog-activation evidence | Retained diagnostic indication that the external watchdog tripped. |
 | Local management clock | Independent board-local clock used for safety FSM, fault detection, and management logic. |
 | Distributed `CLOCK` | Main-board 100 MHz timing clock sent to function boards for sequencer and timing-derived functions. |
 | `local_sync_ready` | Local readiness flag set after IDLE pre-arm `SYNC` and settle time on boards that require local synchronization readiness. |

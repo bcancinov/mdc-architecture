@@ -1,19 +1,17 @@
 ﻿# ADR-004: Clock and Sync Distribution
 
 **Status:** Resolved
-**Last updated:** 2026-07-05
+**Last updated:** 2026-08-14
 
 ---
 
 ## Context
 
-The main board must distribute sequencer `CLOCK` and `SYNC` to all function boards across one or more backplanes. In this architecture, both are LVDS. Two constraints drive the design:
+The main board must distribute sequencer `CLOCK` and `SYNC` to all function boards across one or more backplanes. Both are LVDS. Timing-sensitive acquisition modes benefit from one common full-rate clock, while management and safety logic must remain operational if that clock is lost.
 
-1. **Jitter budget:** The video board supports multiple readout modes selected by sequencer. DCDS is the hardest case: a 16-bit ADC up to 100 MSPS samples in short settled windows (hundreds of ns inside each ~1 us pixel period). If CNV jitters, sampling edges move into signal-slew regions and SNR collapses. DCDS is not always used, but it sets the worst-case architecture limit: **< 5 ps RMS CNV jitter**. Less demanding modes are automatically covered by this limit.
+Some boards and the backplane utility-power domain also include DC-DC converters. Converter synchronization may be used where predictable harmonic relationships or controlled phase offsets improve detector performance, but auxiliary clocks must have defined behavior when the external timing reference disappears.
 
-2. **Switching-converter noise:** Some boards and the backplane utility-power domain include DC-DC converters. If multiple converters switch asynchronously, transients can overlap randomly and create broadband noise. Synchronization, where implemented, collapses this into a predictable, harmonically aligned noise profile that analog filtering can more effectively attenuate.
-
-> **Core Decision:** To meet the 5 ps jitter target without requiring premium PLL performance on every board, distribute the full-rate 100 MHz sequencer clock directly from main to each slot over point-to-point LVDS.
+> **Core Decision:** Distribute the full-rate 100 MHz sequencer clock directly from main to each slot over point-to-point LVDS. Use it directly for sequencer timing; keep management/processor clocks independent; and make synchronization or free-running fallback of non-sequencer auxiliary clocks a board-specific choice.
 
 ---
 
@@ -23,53 +21,52 @@ The main board must distribute sequencer `CLOCK` and `SYNC` to all function boar
 
 A single differential pair routed to all slots via a multidrop stub topology.
 
-**Rejected because:** Stubs create impedance discontinuities at each slot connector. At frequencies above ~40 MHz the reflections cause signal integrity degradation that cannot be corrected without matched termination at every slot, complicating passive backplane design. Point-to-point per-slot traces eliminate this problem entirely.
+**Rejected because:** Backplane stubs, connector discontinuities, and population-dependent loading make timing verification more difficult than dedicated point-to-point links. Point-to-point per-slot traces keep each link independent of slot population.
 
 ---
 
 ## Resolved Constraints
 
-Backplane signal semantics and FSM transition behavior are normative in ADR-003 (`R3`, `R6`, `R7`, `R8`). This ADR specifies clock/SYNC distribution architecture, jitter constraints, and derived readiness requirements. Backplane utility-voltage generation, fixed-frequency operation, mandatory main-board sync capability, and optional converter use of that capability are defined in ADR-005.
+Backplane signal semantics and FSM transition behavior are normative in ADR-003 (`R3`, `R6`, `R7`, `R8`). This ADR specifies clock/SYNC distribution, clock-domain ownership, and derived readiness requirements. Backplane utility-voltage generation, fixed-frequency operation, mandatory main-board sync capability, and optional converter use of that capability are defined in ADR-005.
 
 ### R1: Point-to-Point LVDS Star Topology
 
 Each slot receives its own dedicated differential pair for CLOCK and SYNC, driven independently from the main board. Both links use LVDS electrical signaling. There are no stubs or shared transmission line segments. Each trace is a clean 100 Ω point-to-point link from main driver to slot termination resistor. Signal integrity is independent of slot population — empty slots have no electrical effect on other slots.
 
-### R2: High-frequency clock distributed from main — no local PLLs
+### R2: Full-rate clock distributed from main — no local multiplication in the sequencer path
 
-The main board provides a low-jitter high-frequency sequencer clock at **100 MHz**. This clock is distributed directly to all function boards via the LVDS star.
+The main board provides the sequencer clock at **100 MHz**. This clock is distributed directly to all function boards via the LVDS star.
 
-This ADR does not constrain the exact clock-source implementation. Any source is acceptable if system jitter requirements are met (for example jitter cleaner or low-jitter oscillator).
+This ADR does not constrain the exact clock-source implementation. The clock source and complete timing chain must be verified against the selected ADC, analog front end, sequencer, and detector-performance requirements in the relevant design package.
 
-Function boards use the distributed clock directly and do not multiply it with local PLLs. This is the key optimization:
+Function boards use the distributed clock directly for their primary sequencer timing and do not multiply a lower-frequency local reference to recreate it. Lower-frequency synchronous timing signals may be produced by integer division where required.
 
-- A PLL inside an FPGA operating from a low-frequency reference (e.g. 10 MHz) must multiply up to reach the sequencer clock rate. FPGA internal switching noise couples into PLL rails and the VCO, typically yielding 15–30 ps of output jitter — far beyond the 5 ps budget.
-- A clock distributed at full frequency requires only buffering and digital division on the function board, not multiplication. Digital division by N reduces phase noise by 20·log(N) dB, producing a cleaner output than the source.
-
-### R3: IOB re-timing for the CNV signal
+### R3: Timing-critical outputs and SYNC clock-domain ownership
 
 The CNV (convert-start) signal is generated by FPGA sequencer logic. On video boards, CNV is the ADC start-conversion control. The active readout mode (DCDS or other) is determined by the sequencer loaded for the session.
 Bias boards and clock boards do not generate CNV and do not implement this CNV output requirement.
 
-**The Rule (Normative):** The physical CNV edge must be launched directly by the distributed main `CLOCK`, so that CNV jitter relative to `CLOCK` stays within the 5 ps RMS budget independent of fabric routing delay and switching noise. The same requirement applies to any timing-critical ADC control output. *Reference technique (non-normative):* IOB (pad-level) re-timing — sequencer logic asserts `CNV_enable` in fabric, driving the D input of a flip-flop placed in the output pad, clocked by the distributed `CLOCK` through the global clock tree. Any technique meeting the budget with equivalent determinism is acceptable.
+**The Rule (Normative):** CNV and other timing-critical ADC control outputs must be launched from the distributed `CLOCK` timing domain using a deterministic registered output path. The selected technique and end-to-end timing quality are verified in the video-board design. Dedicated I/O-register re-timing is a normal implementation technique, but equivalent implementations are acceptable.
 
-**The Rationale:** CNV is not a fixed divider output; it is an aperiodic sequencer-driven signal. Its timing inside each pixel changes with readout mode and detector profile. If emitted directly from fabric, switching noise and path skew can push jitter beyond 5 ps. Re-timing at the output pad with the main clock keeps CNV within the DCDS jitter budget.
+Acquisition `SYNC` edges are captured directly in the distributed 100 MHz timing domain so participating sequencers start and stop on defined clock edges. A separate CDC-safe observation of `SYNC` may enter the independent management domain for state reporting, readiness, and telemetry; management-domain recognition is not the source of the timing-critical sequencer edge.
+
+Restoration of a lost distributed `CLOCK` never resumes acquisition automatically. The system remains in `ERROR`, requalifies the restored clock through `START.wait`, returns to `IDLE`, performs any required pre-arm preparation, and is explicitly armed again.
 
 ### R4: Timing-derived watchdog and optional local DC-DC clocks
 
-Each function board first derives a fixed 2 MHz baseline from the incoming 100 MHz main clock using a ÷50 digital divider in FPGA fabric. This baseline is required for the watchdog timing-domain sample clock. It may also be used by board-local special-purpose DC-DC converters when a board design chooses to synchronize those converters to the system timing family.
+Each function board derives a fixed 2 MHz baseline from the incoming 100 MHz main clock using a ÷50 digital divider. This baseline is required for the watchdog timing-domain sample clock. It may also be used by board-local special-purpose DC-DC converters when a board design chooses to synchronize those converters to the system timing family.
 
-For synchronized board-local converters, the switching clock must be derived as an exact integer division of the 2 MHz baseline (÷N). The exact switching frequency is a hardware implementation choice for each specific board design to optimize local filtering and LDO PSRR, but synchronized converters must remain harmonically aligned to the global 2 MHz baseline to prevent cross-board noise pollution on the backplane (see R8).
+For synchronized board-local converters, the switching clock must be an exact integer division of the 2 MHz baseline (÷N). Exact frequency, optional phase control, filtering, and free-running behavior after loss of synchronization are board-design choices. A converter or auxiliary clock that continues after reference loss must do so from a defined local free-running source; this fallback is optional and is never used for sequencer timing.
 
-Common utility-voltage converters (`+3.3V_DIG`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, `-16V_ANA`) are not generated independently on each function board. ADR-005 defines their nominal 2 MHz fixed-frequency operation and the main board's mandatory provision of independently phase-capable utility-sync outputs. Whether an instrument uses those outputs and applies phase offsets remains an ADR-005/common-power design choice.
+Common utility-voltage converters (`+3.3V_DIG_AUX`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, `-16V_ANA`) are not generated independently on each function board. ADR-005 defines their nominal 2 MHz fixed-frequency operation and the main board's mandatory provision of independently phase-capable utility-sync outputs. Whether an instrument uses those outputs and applies phase offsets remains an ADR-005/common-power design choice.
 
 **Cascaded Watchdog Reference:** A separate divider (÷M from the 2 MHz baseline) generates the timing-domain sample clock for the board's Cascaded Hardware Watchdog. Per ADR-001 R5, the binding requirement is two-domain liveness: pet transitions must stop if either the timing chain breaks or the management FSM freezes. The reference pattern uses this timing-domain clock to synchronously sample a continuous toggle generated by the management FSM.
 
-The divider chain present on a function board must reset in `IDLE` (`EN = 0`) on `SYNC` rising edge. This includes the ÷50 baseline divider, the ÷M watchdog divider, and any implemented synchronized local converter divider (÷N). For boards with synchronized local converters, this decouples converter synchronization/settling from acquisition arming by executing the reset while the system is unarmed (`EN=0`), before transitioning to `RUN`. This `SYNC` edge in `IDLE` is pre-arm synchronization only, not an acquisition trigger.
+The watchdog divider need not be phase-aligned across boards; it must run from the distributed timing family and stop when that family stops. A board that intentionally controls the phase of a local converter may use an IDLE `SYNC` edge captured in the 100 MHz domain to reset that converter divider before arming. Other dividers are not required to reset from pre-arm `SYNC`.
 
-`SYNC` and `CLOCK` are generated by the main board with a fixed 180° phase relationship (`SYNC` rising aligned to `CLOCK` falling). This removes uncertain cycle-capture ambiguity when boards generate the divider-reset flag in their local clock domain.
+`SYNC` and `CLOCK` are generated by the main board with a nominal 180° relationship: `SYNC` changes on a `CLOCK` falling edge and is captured on a following rising edge. The exact setup/hold margin is verified by the backplane and board designs.
 
-After divider reset, boards with synchronized local converters must wait the local settling window (`T_settle`) before `EN` may rise into `RUN`. `local_sync_ready` is the readiness flag for this condition: force it to `0` on every IDLE `SYNC` rising edge, and set it to `1` only after local `T_settle` expires. Boards without synchronized local converters may tie this readiness condition to `1` after the watchdog timing-domain qualification requirement is satisfied. `T_settle` remains ICD-defined.
+Boards that implement a phase-controlled local converter must wait their local settling window (`T_settle`) before `EN` may rise into `RUN`. `local_sync_ready` represents this optional condition. Boards without such a requirement tie it to ready. `T_settle` remains ICD-defined.
 
 **Note on architectural abstraction:** While this ADR relies on normative prose to define strict rules, the following block diagram is included pragmatically as a high-level map of clock domains and signal flow boundaries. It illustrates *what boundaries must exist* (e.g., cross-domain sampling) to satisfy the architecture, not *how they must be implemented* at the gate or firmware level. Exact synchronizer topologies and component selections belong in the Firmware and Hardware Design Specifications.
 
@@ -88,7 +85,7 @@ graph TD
         DIV_N["Board-Specific Divider\n÷N"]
         DIV_M["Board-Specific Divider\n÷M"]
         PET_CLK["Watchdog Sample Clock"]
-        RST["Phase Reset\n(on SYNC rising in IDLE)"]
+        RST["Optional converter phase reset\n(SYNC captured in timing domain)"]
         RDY["local_sync_ready\nflag"]
         FSM["Safety FSM\n(Mgmt Domain Toggle)"]
         SAMP["CDC Sampling FF\n(Cascaded Gate)"]
@@ -109,28 +106,26 @@ graph TD
 
     %% Sync Logic
     SYN -- "rising edge (IDLE only)" --> RST
-    RST -- "resets" --> DIV50
     RST -- "resets" --> DIV_N
-    RST -- "resets" --> DIV_M
     RST -- "forces 0" --> RDY
     RDY -. "set 1 after T_settle" .-> RDY
 ```
 
 ### R5: Local management clock independence and CLOCK-derived watchdog reference
 
-Each board must include an independent local management clock source (oscillator/crystal) for the management/control domain. This clock is the time base for the hierarchical Moore FSM, all registered safety-path outputs, and the internal clock monitor. It must **not** be derived from the distributed backplane `CLOCK` signal (100 MHz LVDS) — not directly, and not via a PLL or clock manager that uses the distributed CLOCK as a reference input. If the distributed CLOCK stops (F5), the management clock domain must continue operating normally so the FSM can detect the fault, assert `OK` LOW, and transition to `ERROR.run`.
+Each board must include an independent, continuously running local management clock source for the management/control domain. This clock is the time base for the hierarchical safety FSM, registered safety-path outputs, host-supervision timer, and internal clock monitor. It must not be derived from, switched to, or require phase lock with the distributed backplane `CLOCK`. If the distributed `CLOCK` stops, management, processor communication, diagnostics, and safety logic continue operating.
 
-**Maximum management clock period: `T_mgmt_max` ≤ 100 ns** (equivalent to ≥ 10 MHz). This provides adequate margin for the sub-microsecond registered fault-assertion requirement (ADR-003 R2) including I/O propagation delays. Each board may use any management clock frequency that satisfies `T_mgmt_max`; the specific oscillator frequency is a board-level design choice, not a system-wide constant. All timeouts and timing parameters are defined in real-time units, so boards with different management clock frequencies produce identical real-time behavior.
+The management-clock frequency and implementation are board-design choices sized for the allocated control and fault-response requirements. Operational timeouts are defined in real-time units so boards with different management-clock frequencies behave consistently.
 
 The distributed 100 MHz `CLOCK` is used exclusively for:
 1. Sequencer timing path (acquisition)
 2. 2 MHz baseline derivation (÷50) -> watchdog sample clock (÷M) and optional synchronized local DC-DC switching clock (÷N)
-3. CNV/ADC timing-critical outputs (via IOB re-timing from the CLOCK global tree, R3)
+3. CNV/ADC timing-critical outputs through deterministic registered timing paths (R3)
 
 Normative implications:
 
 - `START.boot` self-configuration and Ethernet/UART/NVM service must run without depending on distributed backplane `CLOCK`.
-- The full hierarchical FSM (`START`, `IDLE`, `RUN`, `ERROR`), registered `OK` driver, `relay_drive`, `EN`, and internal clock monitor (`F5_latch`) must all be clocked from the local management clock domain (ADR-003 R2).
+- The hierarchical safety FSM (`START`, `IDLE`, `RUN`, `ERROR`), registered `OK` driver, `relay_drive`, `EN`, and internal clock monitor must all operate from the local management clock domain (ADR-003 R2). Timing-critical sequencer start/stop actions remain in the distributed 100 MHz domain per R3.
 - **Watchdog Pet Liveness (per ADR-001 R5):** Pet generation must stop if either the management clock domain or the distributed backplane `CLOCK` timing family (e.g., the dedicated watchdog divider ÷M from the 2 MHz baseline on function boards) stops. The cascaded toggle-and-sample architecture defined in ADR-001 R5 is the reference pattern.
 - For `START.wait` qualification (ADR-003), the internal monitor must verify the timing-domain sample clock activity from the perspective of the local management clock domain.
 - Loss of distributed backplane `CLOCK` must not disable management Ethernet diagnostics/recovery capability or FSM operation.
@@ -157,30 +152,26 @@ The sequencer `CLOCK` frequency is fixed at **100 MHz**.
 
 Implications:
 
-- **Global Harmonic Alignment (Normative for synchronized timing-derived clocks):** Every function board derives a fixed 2 MHz baseline from the 100 MHz clock via ÷50. Watchdog sample clocks must be exact integer divisors of this 2 MHz baseline. Board-local DC-DC converters that opt into synchronized switching must also use exact integer divisors of this baseline (e.g., 2 MHz ÷1, 1 MHz ÷2, 500 kHz ÷4, 400 kHz ÷5). Frequencies that do not evenly divide into 2 MHz (such as 800 kHz or 1.5 MHz) are prohibited for clocks that claim ADR-004 synchronization. Because participating clocks reset phase on the exact same SYNC edge, enforcing this 2 MHz harmonic baseline creates a predictable noise profile that board-level analog filtering can effectively attenuate.
-  - **Phase Offsetting (di/dt mitigation, design note):** To reduce peak simultaneous current draw, hardware designers may intentionally offset the phase of their local DC-DC clocks relative to the SYNC reset edge. The offset value is a free board-level design choice because the noise mitigation strategy is frequency-domain: board-level analog filtering attenuates the harmonically aligned switching frequencies, and phase offset does not change frequency content.
+- Every function board derives the 2 MHz watchdog baseline from the 100 MHz clock via ÷50. Board-local DC-DC converters that opt into synchronized switching use exact integer divisors of this baseline. Optional phase alignment or offset is board-specific and is required only when the board design claims controlled converter phase.
 - Video-board sequencer timing uses the 100 MHz base time step (10 ns period)
 - Because the 100 MHz frequency mandates a high timing resolution (10 ns period), it inherently tightens setup/hold margins. This strictly limits the maximum hop count for daisy-chain multi-backplane designs (as noted in R7).
-- LVDS link design and jitter budgeting are verified against 100 MHz operation
+- LVDS link timing and signal integrity are verified against 100 MHz operation and the selected board components
 
 ---
 
 ## Decision
-*Resolved. LVDS star distribution, high-frequency direct distribution without local PLL multiplication, IOB re-timing, independent local management clocks, watchdog divider phase reset in IDLE on SYNC rising, optional local DC-DC divider phase reset where implemented, and the specific sequencer frequency selection (`CLOCK = 100 MHz`) are all settled. Backplane utility-voltage generation is covered by ADR-005. Multi-backplane capacity/topology remains application-dependent and must be justified per instrument ICD/design package.*
+*Resolved. LVDS star distribution, direct 100 MHz sequencer-clock distribution without local frequency multiplication, timing-domain capture of acquisition SYNC, deterministic registered timing-critical outputs, independent management/processor clocks, optional auxiliary-clock fallback, and optional board-local converter phase control are settled. Backplane utility-voltage generation is covered by ADR-005. Multi-backplane capacity/topology remains application-dependent and must be justified per instrument ICD/design package.*
 
 ---
 
 ## Consequences
 
-- Clock distribution implementation must guarantee low-jitter delivery at each slot without relying on local PLL multiplication.
+- Clock distribution and board designs must verify the timing quality required by their selected ADC, analog front end, sequencer, and detector application without recreating the primary sequencer clock through local frequency multiplication.
 - Each board must include an independent local management clock source; management Ethernet/control functions must remain operational without distributed backplane `CLOCK`.
-- FPGA/board designs must implement IOB re-timing for CNV-class timing-critical ADC control outputs.
-- System arm flow must include IDLE SYNC phase-reset and, where synchronized local converters are implemented, `T_settle` readiness gating before EN assertion, per ADR-003.
+- FPGA/board designs must launch CNV-class timing-critical ADC control outputs through deterministic registered timing paths.
+- System arm flow includes IDLE pre-arm synchronization only where a board implements controlled local-converter phase; those boards apply `T_settle` readiness gating before EN assertion per ADR-003.
 - Each instrument must explicitly define slot count and (when needed) multi-backplane distribution topology in its ICD/design package.
-- Each function board must implement watchdog-pet-source qualification behavior for START.wait per `ADR-003 R7`, an internal clock monitor on the local management clock domain (`F5_latch`), a dedicated watchdog status sense line (`WD_latch`), and enforce post-qualification CLOCK loss handling through the existing interlock fault path with diagnostic classification per ADR-001 R6 truth table.
-
-
-
+- Each function board must implement watchdog-pet-source qualification behavior for START.wait per `ADR-003 R7`, an internal clock monitor on the local management clock domain, a dedicated watchdog status indication, and post-qualification CLOCK-loss handling through the existing interlock path with sufficient retained evidence to distinguish clock-loss from watchdog-only events.
 
 
 
