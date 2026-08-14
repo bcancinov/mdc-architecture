@@ -10,7 +10,10 @@ This file contains repository changes before the latest summary in `README.md`.
 - Removed universal jitter and fault-latency numbers in favor of application timing verification and hardware interlock propagation without intentional software delay.
 - Connected compatible backplane utility-converter PGOOD outputs directly to `OK`; main-board analog rail measurements provide diagnosis without individual buffered PGOOD copies.
 - Replaced slot topology with a host-owned logical-role/IP/MAC/serial inventory and made armed host supervision protocol-neutral.
-- Required each board to monitor its local safety-support supply with an open-drain supervisor and isolated hold-up energy so `OK` asserts before that safety circuitry loses power.
+- Required each active board to supervise one local `V_SAFE_AON` with a direct open-drain `OK` output and isolated hold-up energy.
+- Made `+12V_RAW` and the complete utility-rail set mandatory on every standard backplane and added explicit per-board, per-slot, aggregate, connector, and thermal power-budget responsibilities.
+- Defined the power-supervision boundary: common rails are supervised once on the backplane, each active board supervises one local `V_SAFE_AON`, and further board monitoring targets only safety-relevant functions.
+- Assigned one authoritative ADR to each architectural concept, added repository requirement-writing and controlled-vocabulary conventions, and refocused the README and concept guide on their distinct audiences.
 
 ## 2026-07-05 — Architectural simplification: ERROR.init merged into ERROR.run
 

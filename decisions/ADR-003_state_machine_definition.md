@@ -1,4 +1,4 @@
-﻿# ADR-003: Hierarchical State Machine Definition
+# ADR-003: Hierarchical State Machine Definition
 
 **Status:** Resolved
 **Last updated:** 2026-08-14
@@ -28,7 +28,7 @@ The main board is a PLC gateway. Its FSM responsibilities are strictly limited t
 | Monitor errors and recovery | Monitors OK bus and LOOP_IN, drives CLEAR |
 | Provide utility converter synchronization capability | Provides the utility DC-DC sync capability defined in ADR-005; converter use and phase offset remain instrument options |
 
-The main board has no sequencer and no FSM coordination outputs beyond `EN`/`CLEAR`/`SYNC`. Infrastructure outputs (`CLOCK`, `LOOP_OUT`, and the mandatory utility-converter sync capability) are also main-board signals and are defined here or in ADR-005. Whether a common-power implementation consumes those utility-sync outputs and applies phase offsets remains optional. Other control functions (shutter, timing outputs, auxiliary signals) belong to function boards and are intentionally outside this ADR's scope; board-specific behavior for those outputs must be defined in function-board ICDs and future ADRs. Adding sequencer logic to main is explicitly out of scope.
+The main board has no sequencer and no FSM coordination outputs beyond `EN`/`CLEAR`/`SYNC`. Infrastructure outputs (`CLOCK`, `LOOP_OUT`, and the mandatory utility-converter sync capability) are also main-board signals and are defined here or in ADR-005. Whether the backplane utility converters consume those sync outputs and apply phase offsets remains optional. Other control functions (shutter, timing outputs, auxiliary signals) belong to function boards and are intentionally outside this ADR's scope; board-specific behavior for those outputs must be defined in function-board ICDs and future ADRs. Adding sequencer logic to main is explicitly out of scope.
 
 ### R2: Core philosophy
 
@@ -54,7 +54,7 @@ The architecture combines a hardware interlock, an FPGA FSM, and slower Ethernet
 
 ### R3: Backplane signal reference
 
-This table is the authoritative behavioral definition for backplane signals. Other ADR/ICD sections should reference it instead of redefining signal behavior. Electrical details (voltage levels, drive strength, termination, pinout) remain ICD scope.
+This table is the authoritative behavioral definition for backplane signals. Other documents reference it rather than redefining signal behavior. Electrical details (voltage levels, drive strength, termination, pinout) remain ICD scope.
 
 | Signal | Driver | Topology | Trigger | Description |
 |---|---|---|---|---|
@@ -100,7 +100,7 @@ flowchart TD
 
 START.wait is the single stability gate shared by both boot and fault recovery paths. IDLE ↔ RUN indicates arm (IDLE → RUN.init) and disarm (Any RUN.* → IDLE). Fault from IDLE or any RUN.* sub-state goes directly to ERROR.run. START.boot intentionally ignores OK during startup grace. Recovery from ERROR always passes through ERROR.clear → START.wait → IDLE — there is no direct ERROR → IDLE path.
 
-### Visual State Flow
+#### Visual state flow
 
 ```mermaid
 stateDiagram-v2
@@ -167,7 +167,7 @@ SLOW path (armed):  FSM in RUN.wait/RUN.run/RUN.stop with `EN=1` → relay energ
 
 **Function board relay_drive (normative behavior):** `relay_drive` must be a registered Moore output — no combinational glitches may reach the external relay stage (R9) — asserted only in `RUN.wait`/`RUN.run`/`RUN.stop` and de-asserted in every other state. Reference HDL belongs in the Firmware Reference Appendix.
 
-The holistic integration of the diagnostic layer (`fault_vector`), trip layer (`local_trip_summary`), and registered safety outputs (`ok_fault`) — showing how all signals wire together in one module for both main and function boards — is documented in the Firmware Reference Appendix.
+The integration of the diagnostic layer (`fault_vector`), trip layer (`local_trip_summary`), and registered safety outputs (`ok_fault`) is documented in the Firmware Reference Appendix.
 
 The Golden Rule: a healthy board must never pull OK LOW because the FSM entered ERROR. A board may deliberately drive `OK = 0` only through explicit host-authorized injected-fault control (`set_injected_fault`) used for maintenance verification.
 
@@ -197,7 +197,7 @@ The Golden Rule: a healthy board must never pull OK LOW because the FSM entered 
 | `T_WD_HW_max` | ICD-defined | Maximum expected time for watchdog IC to assert `OK` LOW after pet signal ceases (dependent on watchdog IC timeout setting) |
 | `T_WD_RELEASE_max` | ICD-defined | Maximum allowed time after `resume_watchdog_pets` for a tested board's watchdog path to release and for `OK` to return HIGH (assuming no other active fault source) |
 
-These constants are authoritative for FSM behavior and should be referenced by other ADRs/ICDs rather than redefined.
+These constants are authoritative for FSM behavior; other documents reference them rather than redefining them.
 
 **Local synchronization readiness (`local_sync_ready`) (normative):**
 - A board that intentionally controls local-converter phase forces `local_sync_ready = 0` on the accepted IDLE `SYNC` event and sets it to `1` only after local `T_settle` expires.
@@ -309,7 +309,7 @@ Default resting state with all relays open. Host-supplied operational settings a
 2. IDLE pre-arm `SYNC` pulse is host-driven: remote host sends `send_pre_arm_sync` to main; main emits one pulse, must hold the HIGH segment for at least `T_sync_min`, and must not free-run/spam `SYNC` while in IDLE
 3. A board that implements an optional phase-controlled local converter captures the rising edge in the 100 MHz timing domain and resets only that converter's divider. Other divider phase is unchanged.
 4. Such a board updates `local_sync_ready` according to the R6 local synchronization readiness rule. Boards without this feature tie the signal TRUE.
-5. The host should arm only after required boards report ready, and each function board enforces its applicable readiness flags on `EN` rising (otherwise trips interlock)
+5. As the recommended operational workflow, the host should arm only after required boards report ready. This recommendation is not the safety boundary: each function board independently enforces its applicable readiness flags on `EN` rising and trips on violation.
 6. `SYNC` falling edge in IDLE has no acquisition meaning and is ignored by boards while in IDLE
 7. Before asserting `EN`, the main board must ensure `SYNC` is LOW so that function boards, once they reach `RUN.wait`, can detect a clean rising edge to start acquisition
 8. Main must enforce `T_sync_min` on both HIGH and LOW SYNC dwell segments around the pre-arm pulse so all boards deterministically capture transitions
@@ -370,7 +370,7 @@ Entered on any fault transition to `ERROR.run` defined in R8. Main drops `EN = 0
 
 F4 verification uses command-controlled faults, not a dedicated state. `set_injected_fault` / `clear_injected_fault` tests the FPGA driver; `halt_watchdog_pets` / `resume_watchdog_pets` tests the independent watchdog driver and timer. Command state windows and cleanup semantics are owned by the R8 transition reference; the host procedure and timing checks are system-ICD scope.
 
-**Inherent assurance limitation:** `halt_watchdog_pets` requires a functioning FPGA to execute the halt. It verifies watchdog timer logic and physical open-drain drive, but it cannot prove behavior under true FPGA-dead conditions (F2a/F2b boundary cases). Brain-dead assurance comes from hardware architecture (independent `+12V_RAW`-derived watchdog/fail-safe supply or equivalent independent supply + fail-safe path) and certified component choice (ADR-001 R2/R7).
+**Inherent assurance limitation:** `halt_watchdog_pets` requires a functioning FPGA to execute the halt. It verifies watchdog timer logic and physical open-drain drive, but it cannot prove behavior under true FPGA-dead conditions (F2a/F2b boundary cases). Brain-dead assurance comes from `V_SAFE_AON`, the independent watchdog/fail-safe path, and component reliability requirements in ADR-001.
 
 ### R8: Transition and command reference
 
@@ -397,7 +397,7 @@ Each function board relay arm path uses an external latch/flip-flop with asynchr
 - **Q (output):** Sole driver of the relay coil. HIGH = relay armed.
 - **ARM input:** Registered FPGA output (same guardrail as the OK driver, ADR-001 R4). Asserted only after `RUN.init` completes (at `RUN.wait` entry) — the same timing point as the existing `relay_drive` assertion.
 - **Asynchronous RESET:** Active when `EN = 0` OR `OK = 0`. **RESET is dominant over ARM** — the output can only be HIGH when both `EN = 1` AND `OK = 1`.
-- **Power supply:** Latch/flip-flop IC and all RESET-path logic must be powered from the always-on watchdog supply (`+12V_RAW` LDO or equivalent independent supply), not the FPGA digital rail — so RESET correctly tracks backplane signals even if local logic rails collapse.
+- **Power supply:** The latch/flip-flop IC and RESET-path logic shall use the board-local `V_SAFE_AON` supply defined by ADR-001 R9, not an FPGA/processor rail.
 - **Relay type:** Normally-open (energized to arm). Complete board power loss de-energizes the relay mechanically, independent of latch state.
 - **FPGA `relay_drive`:** Becomes the ARM control signal. It no longer drives the relay coil directly.
 
@@ -420,4 +420,4 @@ For a reference schematic implementation using a D flip-flop and an open-drain w
 - Function boards must enforce EN-rise readiness checks and convert violations into interlock faults via `OK` pull-down.
 - ICD must define which host interactions qualify for supervision refresh, the required board response, cadence, retry policy, and timeout tuning.
 - Verification must include transition-coverage tests for nominal flow, rejected arm attempts, and reboot-edge cases.
-- Each function board must implement an external reset-dominant latch or D flip-flop stage (always-on supply) as the sole relay coil driver, with ARM from a registered FPGA output and asynchronous RESET from `NOT(EN) OR NOT(OK)` (R9).
+- Each function board shall implement an external reset-dominant latch or D flip-flop stage powered from `V_SAFE_AON` as the sole relay coil driver, with ARM from a registered FPGA output and asynchronous RESET from `NOT(EN) OR NOT(OK)` (R9).

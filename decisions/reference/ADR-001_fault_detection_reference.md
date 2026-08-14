@@ -6,7 +6,7 @@ ADR-001 is the peer-review entry point for the health-detection decision. This f
 
 ## Watchdog and clock monitor architecture
 
-This diagram applies to all boards. The timing-domain source differs by board role:
+This diagram applies to all active boards. The timing-domain source differs by board role:
 
 - Main board: raw external `CLOCK` source domain.
 - Function boards: dedicated watchdog divider (`÷M`) from the 2 MHz baseline derived from distributed backplane `CLOCK`.
@@ -23,10 +23,13 @@ graph LR
         SAMP["CDC sampling FF\n(gated pet generator)"]
     end
 
-    subgraph wd_domain ["Safety-Support Domain (+12V_RAW LDO)"]
+    subgraph wd_domain ["Local Safety-Support Domain"]
+        LDO["Safety LDO"]
+        VSAFE["V_SAFE_AON"]
         WD["External Watchdog IC"]
         OD["Open-Drain Driver"]
-        HOLD["Isolated hold-up\ncapacitor"]
+        DIODE["Isolation diode"]
+        HOLD["Small hold-up\ncapacitor"]
         SUP["Voltage supervisor"]
         SUPOD["Open-drain output"]
     end
@@ -37,10 +40,14 @@ graph LR
     WD -- "timeout" --> OD
     WD -- "status sense line" --> FSM
     OD -- "pulls LOW" --> OK["OK Bus"]
-    SAFE["Local safety-support rail"] --> SUP
-    SAFE --> HOLD
-    HOLD --> SUP
-    SUP -- "undervoltage" --> SUPOD
+    RAW["Board +12V_RAW input"] --> LDO --> VSAFE
+    VSAFE --> WD
+    VSAFE --> OD
+    VSAFE -- "sense" --> SUP
+    VSAFE --> DIODE --> HOLD
+    HOLD -- "temporary power" --> SUP
+    HOLD -- "temporary power" --> SUPOD
+    SUP -- "V_SAFE_AON undervoltage" --> SUPOD
     SUPOD -- "pulls LOW before collapse" --> OK
 ```
 
@@ -48,7 +55,7 @@ Key properties:
 
 - Cascaded pet generation requires both management-domain execution and timing-domain clock activity.
 - If either domain freezes, pet transitions stop and the external watchdog independently times out to pull `OK` LOW.
-- If the local safety-support rail collapses, the supervisor and isolated hold-up energy assert `OK` before the watchdog/fail-safe circuitry falls outside its operating range.
+- If `V_SAFE_AON` collapses, the isolated hold-up powers only the supervisor/output path long enough to assert `OK`; it does not keep the board operating.
 - Main-board freeze while armed is covered by hardware: the main-board watchdog pulls `OK` LOW, and function-board relay RESET paths (`RESET = NOT(EN) OR NOT(OK)`, ADR-003 R9) de-energize relays.
 
 ## Continuity loop routing
