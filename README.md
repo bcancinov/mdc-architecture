@@ -13,7 +13,7 @@ specifications/
 ├── README.md                  Repository entry point and writing conventions
 ├── CHANGELOG.md               Revision history
 ├── decisions/                 Architecture Decision Records (ADRs)
-│   └── reference/             Detailed tables and supporting ADR diagrams
+│   └── reference/             Non-normative examples, tables, and supporting diagrams
 ├── interfaces/                Interface Control Documents (planned)
 ├── design/                    Firmware and hardware design specifications (planned)
 └── integration/               Concept guides and integration material
@@ -54,7 +54,7 @@ Additional rules:
 3. Diagrams, examples, rationale, and text labeled **Reference**, **Design guidance**, or **Non-normative** are illustrative unless explicitly declared normative.
 4. Exact component choices, register names, and internal implementation techniques belong in design specifications unless cross-board compatibility or safety requires them architecturally.
 5. ICD-defined values shall not be presented as unofficial fixed defaults in explanatory documents.
-6. Exact signals, states, commands, constants, and rail names use code formatting, for example `OK`, `ERROR.run`, and `+12V_RAW`.
+6. Exact signals, states, commands, constants, and rail names use code formatting, for example `OK`, `ERROR.run`, and `+12V`.
 
 ## Architectural ownership
 
@@ -62,12 +62,12 @@ Additional rules:
 |---|---|
 | Fault taxonomy and physical fault-detection mechanisms | [ADR-001](decisions/ADR-001_presence_health_detection.md) |
 | Persistent configuration, identity, and host inventory | [ADR-002](decisions/ADR-002_backplane_configuration_identification.md) |
-| FSM states, transitions, timers, and host-supervision behavior | [ADR-003](decisions/ADR-003_state_machine_definition.md) |
+| FSM states, transitions, timing obligations, and host-supervision behavior | [ADR-003](decisions/ADR-003_state_machine_definition.md) |
 | `CLOCK`, `SYNC`, clock domains, and timing ownership | [ADR-004](decisions/ADR-004_clock_sync_distribution.md) |
-| Mandatory common power rails, rail supervision, and power budgets | [ADR-005](decisions/ADR-005_backplane_utility_voltages.md) |
+| System input protection, mandatory common power rails, rail supervision, and power budgets | [ADR-005](decisions/ADR-005_backplane_utility_voltages.md) |
 | Acquisition data transport and overrun interaction | [ADR-006](decisions/ADR-006_acquisition_data_path.md) |
 
-The owner defines the mechanism. Other documents may repeat the resulting behavior when needed for context.
+The owner defines the architectural rule and required behavior. Other documents may repeat the resulting consequence when needed for context. Files under `decisions/reference/` are explicitly non-normative; the parent ADR controls if a reference example differs from a requirement.
 
 ## Controlled vocabulary
 
@@ -77,11 +77,14 @@ The owner defines the mechanism. Other documents may repeat the resulting behavi
 | Function board | Active plug-in board performing detector-specific work, such as video, bias, or clock generation |
 | Bridge board | Active board extending supported signals to another backplane |
 | Passive terminator | Unpowered slot insert that maintains continuity-loop routing |
-| Backplane board | Physical PCB carrying slots, shared signals, `+12V_RAW`, and common utility converters |
+| Backplane board | Physical PCB carrying slots, shared signals, protected `+12V`, and common utility converters |
 | Active board | Powered main, function, or bridge board participating in communication or safety logic |
 | Utility rail | Mandatory common low-current rail generated on the backplane board |
-| Qualified rail-health output | Open-drain backplane contribution to `OK`, provided by verified native PGOOD or a dedicated supervisor |
-| `V_SAFE_AON` | Low-power local safety supply on each active board; not a backplane-distributed rail |
+| Qualified rail-health output | Open-drain backplane contribution to `OK` for a shared rail, provided by a verified native converter PGOOD or a dedicated voltage supervisor |
+| `V_INTERLOCK_LOCAL` | Low-power board-local supply for independent interlock hardware; not a backplane-distributed rail |
+| PGOOD | A native power-good output from a power converter; the term is not used for watchdog or fail-safe outputs |
+| `+12V_IN` | External system power before the central backplane eFuse |
+| `+12V` | Protected bulk rail after the central eFuse; distributed to the backplane loads and active boards |
 | Fault | Hardware or electrical condition requiring safe-state action |
 | Supervisory interlock event | Non-hardware condition, such as armed host-supervision timeout, requiring the same safe response |
 | Not Ready | Condition that blocks arming while disarmed but is not itself a fault |

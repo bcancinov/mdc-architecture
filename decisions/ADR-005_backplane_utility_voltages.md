@@ -1,15 +1,15 @@
 # ADR-005: Backplane Utility Voltage Distribution
 
 **Status:** Resolved
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-16
 
 ---
 
 ## Context
 
-Most modular boards need the same analog utility rails and some low-power digital support circuitry benefits from a shared auxiliary rail. If every board generates these modest common loads locally from the distributed `+12V_RAW` input, the system duplicates converter area, thermal load, layout effort, and switching-noise sources across the backplane.
+Most modular boards need the same analog utility rails and some low-power digital support circuitry benefits from a shared auxiliary rail. If every board generates these modest common loads locally from the distributed `+12V` input, the system duplicates converter area, thermal load, layout effort, and switching-noise sources across the backplane.
 
-Processor, FPGA, memory, and other high-current digital loads are different: distributing their power at 3.3 V would increase connector current and voltage drop, while their fast load transients and local point-of-load converters could conduct noise onto a shared rail. These loads therefore remain locally converted from `+12V_RAW`.
+Processor, FPGA, memory, and other high-current digital loads are different: distributing their power at 3.3 V would increase connector current and voltage drop, while their fast load transients and local point-of-load converters could conduct noise onto a shared rail. These loads therefore remain locally converted from `+12V`.
 
 Specialized boards may still need uncommon detector-specific voltages such as +40V, -40V, +100V, or -100V. Those rails are not common to all boards and shall not be distributed as standard backplane resources.
 
@@ -27,23 +27,44 @@ Every standard backplane board shall generate and distribute the complete set of
 | `+16V_ANA` | Common positive analog utility rail |
 | `-16V_ANA` | Common negative analog utility rail |
 
-The existing `+12V_RAW` distribution is also mandatory. It is the required input for board-local conversion that supplies processors, FPGAs, memory, and other high-current digital loads, and the preferred input for specialized converters that generate non-common rails such as high-voltage detector rails.
+The protected `+12V` distribution is also mandatory. It is the required input for board-local conversion that supplies processors, FPGAs, memory, and other high-current digital loads, and the preferred input for specialized converters that generate non-common rails such as high-voltage detector rails.
 
 Utility-voltage converters are physically located on the backplane board, not on the main board and not independently on every function board. Their standard connector contacts shall remain assigned to these rails and shall not be omitted, left unpowered, or repurposed in a compliant standard backplane. Individual boards need not consume every rail. A specialized instrument that removes or changes a standard rail is a separate architecture variant requiring an explicit decision and ICD, not an option within this ADR.
 
-Function boards may add local protection, filtering, LDOs, or point-of-load regulation where needed, but shall not regenerate these common utility voltages from `+12V_RAW` unless the board ICD/design specification defines a justified variant. `+3.3V_DIG_AUX` is not a bulk processor/FPGA supply and shall not supply high-current digital point-of-load conversion.
+Function boards may add local protection, filtering, LDOs, or point-of-load regulation where needed, but shall not regenerate these common utility voltages from `+12V` unless the board ICD/design specification defines a justified variant. `+3.3V_DIG_AUX` is not a bulk processor/FPGA supply and shall not supply high-current digital point-of-load conversion.
+
+## System 12 V Input Protection
+
+The external power input is named `+12V_IN`. One central eFuse on the backplane shall protect the complete system and produce the distributed rail named `+12V`:
+
+```text
++12V_IN -> central backplane eFuse -> protected +12V
+                                           |
+                                           +-> utility converters
+                                           +-> main, function, and bridge boards
+```
+
+The central eFuse shall provide hardware protection against sustained input undervoltage, overvoltage, reverse polarity, excessive aggregate current, and system inrush. It acts as the system power circuit breaker: when required for protection, it disconnects the complete downstream `+12V` distribution. Exact thresholds, delays, current limits, component ratings, and latch-or-retry behavior belong to the backplane hardware design specification.
+
+The eFuse shall not be disabled by `EN`, `OK`, or an FSM state. A normal interlock fault makes hazardous functions safe but does not command system power off. Complete eFuse cutoff is already a safe condition because active boards and normally-open relays lose power; the architecture does not require `OK` or telemetry to remain valid after complete system-power removal.
+
+Local board eFuses are not mandatory. Each board shall meet its allocated steady-state, peak, and inrush current and shall include whatever local protection its hardware design needs to avoid damaging the board, connector, or shared distribution. A fuse, protected converter, load switch, eFuse, or another justified method may satisfy that requirement. The common analog utility rails normally feed board-local filters and LDOs and do not require an eFuse at every board input.
 
 ## Utility-Rail Fault Protection and Diagnostics
 
-The backplane board owns supervision of the shared power sources. It shall produce one qualified open-drain rail-health contribution for `+12V_RAW` and for each utility rail. These outputs shall connect directly to the shared `OK` bus. A common input or utility-rail fault therefore uses the hardware interlock path without relying on the main processor or an individual telemetry link.
+This section applies to the protected `+12V` distribution and the common utility rails generated by the backplane. It does not define function-board watchdogs, fail-safe logic, or supervision of board-local converters; those are separate local mechanisms defined by ADR-001.
 
-For a utility rail, a converter's native PGOOD may provide this contribution when it has verified coverage and is electrically compatible with the `OK` bus in powered, unpowered, startup, shutdown, and fault states. If native PGOOD is insufficient, the backplane shall add a simple compatible rail supervisor or open-drain interface; redundant supervision is not required when native PGOOD already provides the necessary coverage.
+The backplane board owns supervision of shared power while system power remains available. It shall produce one qualified open-drain rail-health contribution for protected `+12V` and for each utility rail. These outputs shall connect directly to the shared `OK` bus. A common rail fault therefore uses the hardware interlock path without relying on the main processor or an individual telemetry link. The central eFuse independently owns cutoff for an unsafe `+12V_IN` condition.
 
-`+12V_RAW` shall use a backplane input-undervoltage supervisor whose threshold initiates the common trip before downstream control becomes invalid. A small isolated hold-up path shall keep that supervisor and its open-drain output able to assert during input collapse; it does not keep the backplane or boards operating. The backplane power design shall verify voltage ratings, polarity, leakage, pull-up current, unpowered behavior, thresholds, hold-up behavior, and fault coverage.
+For a utility rail, a converter's native PGOOD may provide this contribution when it has verified coverage and is electrically compatible with the `OK` bus in powered, unpowered, startup, shutdown, and fault states. In this architecture, **PGOOD means a native converter power-good output**; watchdog timeout, fail-safe, and interlock-supply supervisor outputs are not called PGOOD. If native PGOOD is insufficient, the backplane shall add a simple compatible rail supervisor or open-drain interface; redundant supervision is not required when native PGOOD already provides the necessary coverage.
 
-The main board shall measure `+12V_RAW` and the utility-rail voltages and may measure their currents for telemetry and root-cause diagnosis. These analog measurements are diagnostic only and do not replace the direct rail-health-to-`OK` path. Individual PGOOD copies shall not be routed to the main board: avoiding those copies removes the need for a buffer or isolation channel for every converter. Consequently, a very brief self-clearing event may be reported only as a generic backplane-power trip unless the backplane retains additional local evidence.
+The central eFuse's protected-output PGOOD or fault indication may provide the `+12V` rail-health contribution when its behavior is compatible with `OK`; otherwise the backplane shall add a simple protected-output supervisor or interface. This `OK` contribution improves fault response while the bus is powered, but complete eFuse cutoff does not depend on it.
 
-All mandatory utility converters shall remain enabled whenever the backplane is powered. They shall not be disabled as a consequence of `EN`, `OK`, or an FSM state; this avoids a circular condition in which an interlock trip removes a rail and prevents its PGOOD from recovering. Selective software shutdown of a mandatory utility rail is outside this architecture.
+The main board shall measure protected `+12V` and the utility-rail voltages and may measure their currents for telemetry and root-cause diagnosis. These analog measurements are diagnostic only and do not replace the direct rail-health-to-`OK` path. Individual PGOOD copies shall not be routed to the main board: avoiding those copies removes the need for a buffer or isolation channel for every converter. Consequently, a very brief self-clearing event may be reported only as a generic backplane-power trip unless the backplane retains additional local evidence.
+
+A function-board converter PGOOD is not a backplane rail-health output, and the architecture does not require every local converter to have an independent `OK` contribution. Loss of processor or FPGA power is covered by the `V_INTERLOCK_LOCAL`-powered fail-safe path. A board shall add local voltage or output supervision only when a failure could leave a safety-relevant function in a hazardous state not already covered by the fail-safe or watchdog paths; such a monitor enters that board's normal local-fault trip path.
+
+All mandatory utility converters shall remain enabled whenever protected `+12V` is available. They shall not be disabled as a consequence of `EN`, `OK`, or an FSM state; this avoids a circular condition in which an interlock trip removes a rail and prevents its PGOOD from recovering. Selective software shutdown of a mandatory utility rail is outside this architecture.
 
 During power-up, qualified rail-health outputs may hold `OK` LOW until all mandatory rails are valid. ADR-003 owns startup qualification: the fleet cannot reach `IDLE` until `OK` becomes stable, and a rail that never becomes valid causes the startup deadline to fail. During operation, loss of any mandatory common rail pulls `OK` LOW. If the electrical condition later clears, the system remains latched in `ERROR` and must complete explicit recovery through ADR-003.
 
@@ -51,11 +72,9 @@ During power-up, qualified rail-health outputs may hold `OK` LOW until all manda
 
 ## Utility Converter Frequency and Synchronization
 
-Backplane utility DC-DC converters shall use a fixed nominal **2 MHz switching frequency during normal, non-fault acquisition operation**. Fixed-frequency operation keeps the conducted-noise spectrum predictable and lets function-board input filters be designed around a known fundamental and its harmonics. Converter efficiency, thermal margin, magnetic-component loss, and control-loop performance at 2 MHz must be verified in the backplane power design, particularly for the `+/-16V_ANA` conversion stages.
+Predictable conducted-noise patterns during acquisition are an architectural objective. Every enabled backplane utility-converter switching channel shall therefore use a synchronization signal during acquisition and shall operate in forced continuous-switching, fixed-frequency mode whenever enabled. Burst mode, pulse skipping, automatic low-frequency operation, and spread spectrum are prohibited for these utility converters. Protective current limiting, thermal shutdown, and fault shutdown remain permitted.
 
-During normal, non-fault acquisition operation, utility converters shall not enter burst mode, pulse-skipping mode, frequency foldback, spread-spectrum operation, or another mode that introduces asynchronous or low-frequency switching components. Before an external synchronization reference is available, or after its loss, an enabled converter may free-run within an ICD-defined band around 2 MHz, but it must remain in a continuous fixed-frequency operating mode. This restriction does not prevent protective shutdown, current limiting, or other required fault responses. Startup, light-load, synchronization-loss, and fault behavior are backplane ICD/design-package requirements.
-
-The **main board is the utility synchronization authority** and shall implement five independently phase-capable, point-to-point LVDS outputs:
+The **main board is the utility synchronization authority** and shall implement five point-to-point LVDS outputs as part of the standard main-board/backplane interface:
 
 ```text
 UTILITY_DCDC_SYNC[0]_P/N
@@ -63,37 +82,36 @@ UTILITY_DCDC_SYNC[0]_P/N
 UTILITY_DCDC_SYNC[4]_P/N
 ```
 
-These outputs reserve synchronization capability for up to five independent switching channels; they are not permanently assigned one-to-one to the five utility rails. A single converter channel may generate more than one rail. Channel-to-converter and channel-to-rail mapping belong to the backplane ICD.
+These outputs reserve synchronization capability for up to five independent switching channels and are not permanently assigned one-to-one to the five rails. The main-board connector pins, drivers, and timing-generation capability are mandatory even when a backplane uses fewer channels.
 
-Each output shall generate 2 MHz from the main board's 100 MHz timing source and support an independently configurable phase offset with 10 ns resolution over the 500 ns switching period. The main-board connector pins, FPGA or timing-logic implementation, and output buffering are mandatory even when a particular instrument elects not to synchronize its utility converters.
+Every output frequency shall be coherent with the common 2 MHz baseline:
 
-Use of external synchronization by a utility converter is optional when fixed-frequency unsynchronized operation satisfies the instrument's conducted-noise, EMC, and detector-performance requirements. When synchronization is used, all channels may use the same phase or an instrument-defined phase plan may offset them to reduce coincident input-current transients. No universal phase plan is imposed by this ADR because the useful offsets depend on converter topology and load. Phase settings and the output-enable mask are volatile main-board operational configuration supplied by the host in `IDLE` per ADR-002. They shall remain fixed throughout acquisition; implementations shall prevent malformed or shortened sync periods when applying a new setting.
+```text
+f_sync[i] = 2 MHz / N_i
+```
 
-The LVDS links shall be routed point-to-point and terminated on the backplane board. LVDS receivers shall be placed near the utility converters, with only short local single-ended connections from the receivers to converter synchronization inputs. Receiver behavior for an absent, disconnected, or unpowered transmitter must be deterministic and must permit the converter's defined free-running fallback. Differential impedance, termination value, electrical levels, intra-pair skew, channel-to-channel skew, return-pin allocation, and receiver/component selection are ICD/design-package scope.
+`N_i` is a positive integer defined by the backplane ICD. The ICD also defines channel mapping, enabled channels, phase behavior, phase resolution, converter capture range, free-running tolerance, and electrical implementation. Settings that affect switching timing shall remain fixed during acquisition.
+
+Before synchronization is available, or after it is lost, an enabled converter shall remain in a defined forced continuous-switching, fixed-frequency free-running mode. Synchronization loss shall not create an uncontrolled rail or require processor intervention. Receiver, termination, routing, and component details belong to the backplane ICD and hardware design.
 
 This decision intentionally keeps utility-converter synchronization separate from the function-board sequencer `CLOCK`/`SYNC` behavior in ADR-004:
 
 - `UTILITY_DCDC_SYNC[0..4]` applies only to centrally generated backplane utility rails.
 - ADR-004 timing applies to sequencer timing, watchdog timing-domain qualification, and board-local special-purpose converters that explicitly derive switching clocks from distributed timing.
-- Utility synchronization or phase offset is not an FSM readiness gate unless an instrument ICD adds a measured, project-specific requirement.
+- Utility synchronization details do not add a shared FSM state or readiness bus. The backplane design shall ensure that converters have reached their defined operating mode before acquisition.
 
 ---
 
-## Function-Board Input Filtering
+## Function-Board Utility-Rail Conditioning
 
-A function board that supplies noise-sensitive analog circuitry from a backplane analog utility rail shall provide a local, damped input low-pass filter **on the function board, immediately after the backplane connector and before the low-noise LDO or analog point-of-load regulator**. The intended physical partition is:
+Every function board consuming a shared analog utility rail shall provide board-entry conditioning that serves both directions:
 
-```text
-backplane connector -> protection/inrush -> dirty-side capacitor
-                    -> series filter element -> clean-side capacitor
-                    -> low-noise LDO/regulator -> sensitive analog load
-```
+1. reject shared-rail disturbances sufficiently for its local analog circuitry; and
+2. prevent its load transients and conducted emissions from degrading the rail for other boards.
 
-A damped C-L-C (pi) network is the normal implementation, but this ADR specifies the required isolation and attenuation rather than mandating one topology for every load. Filter stability (damping/Q, impedance interaction with the backplane source, regulator, and load) and component-level engineering concerns (derating, parasitics, saturation, inrush, dropout, load transients) are design-specification scope, verified per the board ICD/design package.
+The backplane ICD shall define source impedance, ripple/noise and transient limits, and the maximum conducted disturbance that one board may return to a shared rail. Each function-board ICD shall declare its steady-state and transient current, input capacitance, inrush, required incoming-noise rejection, and permitted injected disturbance.
 
-Each function-board ICD/design specification shall define the required attenuation at 2 MHz and relevant harmonics, the implemented topology and damping method, and the maximum input capacitance/inrush presented to the backplane. Digital-only loads do not require the same analog input filter unless their board-level noise or transient budget requires one.
-
-Local function-board filtering is additional isolation, not a substitute for a compliant backplane rail. The backplane power design shall still meet the ICD-defined ripple, conducted-noise, transient, and stability limits at the backplane interface.
+Filter and regulator topology, damping, component values, and exact placement belong to the board hardware design. An LDO alone, RC/LC/pi network, ferrite and reservoir, active filter, or another solution is acceptable when verified against the shared-rail interface and detector-performance requirements. No per-board analog-rail eFuse is required by this architecture.
 
 ---
 
@@ -119,19 +137,21 @@ The intended relationship and bonding between analog and digital circuit returns
 2. Each function-board ICD shall declare, for every consumed rail, its maximum steady-state current, peak/transient demand, inrush or input capacitance, tolerance, and sequencing requirements.
 3. The backplane ICD shall define per-slot and aggregate limits, protection thresholds, voltage-drop budgets, connector-contact allocation, converter and copper thermal limits, sequencing, ripple/noise limits, and telemetry. System integration shall verify that the installed fleet remains within every limit under worst-case simultaneous operation. Physical slot availability does not imply electrical capacity.
 4. Backplane utility voltages do not replace board-local specialized rails where a voltage is not common across modular boards.
-5. Safety-critical watchdog and fail-safe `OK` paths shall use the board-local safety supply defined by ADR-001, independently of processor/FPGA rails and `+3.3V_DIG_AUX`.
-6. A board-local converter that generates a specialized rail from `+12V_RAW` may synchronize its switching frequency according to ADR-004 when justified by the board ICD/design specification.
+5. Safety-critical watchdog and fail-safe `OK` paths shall use the board-local `V_INTERLOCK_LOCAL` supply defined by ADR-001, independently of processor/FPGA rails and `+3.3V_DIG_AUX`.
+6. A board-local converter that generates a specialized rail from `+12V` may synchronize its switching frequency according to ADR-004 when justified by the board ICD/design specification.
 
 ---
 
 ## Consequences
 
+- One central backplane eFuse defines the boundary between external `+12V_IN` and the protected distributed `+12V` rail.
+- A central eFuse cutoff removes power from the complete system; local board eFuses are optional implementation choices rather than architecture requirements.
 - Common rail generation moves out of most function-board designs, reducing duplicated converter circuitry and aggregate switching-noise sources.
 - A single standard backplane power definition is retained even when a specialized detector does not consume every available rail.
-- The backplane design becomes responsible for utility-rail capacity, protection, qualified rail-health-to-`OK` compatibility, 2 MHz fixed-frequency operation, output filtering, synchronization receivers, and optional phase-interleaved operation.
+- The backplane design becomes responsible for utility-rail capacity, protection, qualified rail-health-to-`OK` compatibility, coherent synchronization, continuous-switching operation, and the shared conducted-noise interface.
 - Common-rail faults produce a fast shared interlock trip, while main-board analog measurements provide rail-level diagnostic context without separate PGOOD inputs.
-- The main-board connector and timing logic reserve five independently phase-capable LVDS synchronization outputs even when an instrument does not use them.
-- Function-board ICDs must list which utility rails they consume and the local regulation/filtering used for noise-sensitive analog loads.
+- The main-board connector and timing logic reserve five LVDS synchronization outputs; mapping, divisors, and phase behavior are ICD-defined.
+- Function-board ICDs must list which utility rails they consume and demonstrate compliant bidirectional rail conditioning.
 - Backplane and connector designs must preserve analog/digital power zoning and intentional return-current paths.
 - Specialized high-voltage or detector-specific rails remain local to the boards that need them.
-- EMC/noise validation decides whether a given instrument must connect its utility converters to the provided synchronization outputs and whether phase offsets provide a useful improvement.
+- EMC/noise validation verifies synchronized continuous-switching behavior and determines whether phase offsets provide a useful improvement.

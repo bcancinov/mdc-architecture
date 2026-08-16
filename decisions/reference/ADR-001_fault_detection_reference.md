@@ -1,12 +1,14 @@
 # ADR-001 Reference: Fault Detection Diagrams
 
-This reference supports `../ADR-001_presence_health_detection.md`.
+**Status: Non-normative reference**
+
+This reference illustrates implementations consistent with `../ADR-001_presence_health_detection.md`. It does not add requirements; the parent ADR controls if the documents conflict.
 
 ADR-001 is the peer-review entry point for the health-detection decision. This file holds supporting diagrams so the ADR can stay focused on the fault taxonomy, required mechanisms, and diagnostic truth tables.
 
-## Watchdog and clock monitor architecture
+## Example watchdog and clock monitor architecture
 
-This diagram applies to all active boards. The timing-domain source differs by board role:
+This example shows a cascaded implementation of the required two-domain liveness behavior. Other implementations are acceptable. In this example, the timing-domain source differs by board role:
 
 - Main board: raw external `CLOCK` source domain.
 - Function boards: dedicated watchdog divider (`÷M`) from the 2 MHz baseline derived from distributed backplane `CLOCK`.
@@ -23,9 +25,9 @@ graph LR
         SAMP["CDC sampling FF\n(gated pet generator)"]
     end
 
-    subgraph wd_domain ["Local Safety-Support Domain"]
-        LDO["Safety LDO"]
-        VSAFE["V_SAFE_AON"]
+    subgraph wd_domain ["Local Interlock-Power Domain"]
+        LDO["Interlock Regulator"]
+        VSAFE["V_INTERLOCK_LOCAL"]
         WD["External Watchdog IC"]
         OD["Open-Drain Driver"]
         DIODE["Isolation diode"]
@@ -40,14 +42,14 @@ graph LR
     WD -- "timeout" --> OD
     WD -- "status sense line" --> FSM
     OD -- "pulls LOW" --> OK["OK Bus"]
-    RAW["Board +12V_RAW input"] --> LDO --> VSAFE
+    RAW["Board protected +12V input"] --> LDO --> VSAFE
     VSAFE --> WD
     VSAFE --> OD
     VSAFE -- "sense" --> SUP
     VSAFE --> DIODE --> HOLD
     HOLD -- "temporary power" --> SUP
     HOLD -- "temporary power" --> SUPOD
-    SUP -- "V_SAFE_AON undervoltage" --> SUPOD
+    SUP -- "V_INTERLOCK_LOCAL undervoltage" --> SUPOD
     SUPOD -- "pulls LOW before collapse" --> OK
 ```
 
@@ -55,8 +57,8 @@ Key properties:
 
 - Cascaded pet generation requires both management-domain execution and timing-domain clock activity.
 - If either domain freezes, pet transitions stop and the external watchdog independently times out to pull `OK` LOW.
-- If `V_SAFE_AON` collapses, the isolated hold-up powers only the supervisor/output path long enough to assert `OK`; it does not keep the board operating.
-- Main-board freeze while armed is covered by hardware: the main-board watchdog pulls `OK` LOW, and function-board relay RESET paths (`RESET = NOT(EN) OR NOT(OK)`, ADR-003 R9) de-energize relays.
+- The shown diode/capacitor path is one way to keep the supervisor/output valid briefly during an isolated `V_INTERLOCK_LOCAL` collapse; the ADR requires the behavior, not this topology.
+- Main-board freeze while armed is covered by hardware: the main-board watchdog pulls `OK` LOW, and function-board relay-permissive paths de-energize relays as required by ADR-003 R9. A reset-dominant expression such as `RESET = NOT(EN) OR NOT(OK)` is one possible implementation.
 
 ## Continuity loop routing
 

@@ -1,17 +1,17 @@
 # ADR-003: Hierarchical State Machine Definition
 
 **Status:** Resolved
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-16
 
 ---
 
 ## Context
 
-The system uses a hierarchical Moore state machine. In START/RUN/ERROR entry flows, the main FPGA drives shared backplane control signals (`EN`, `CLEAR`, `SYNC`) to coordinate all function boards. Recovery progress inside `ERROR.clear` is local to each board, while F4 driver verification is host-orchestrated through injected-fault commands (not a separate state).
+The main board coordinates arming, timing, and recovery through shared backplane signals, while every active board independently enforces its own safety and readiness conditions. The architecture needs common externally visible state behavior without prescribing the internal registers or HDL structure used by each board.
 
-This ADR defines all states, entry/exit conditions, sub-states, backplane signals, and kill-switch logic. It incorporates decisions from ADR-001 (fault detection), ADR-002 (configuration), and ADR-005 (utility-voltage distribution).
+> **Core decision:** Use the common state families `START`, `IDLE`, `RUN`, and `ERROR`. Enter the safe state promptly on a fault, permit arming only after qualification, and require explicit recovery after every trip.
 
-**Reader guide:** R1-R6 define the core architectural rules and shared terminology. R7 gives the readable state behavior. R8 points to the exhaustive transition reference used by implementers and test authors.
+Exact register names, state encoding, debounce implementation, diagnostic-bit layout, and timer values belong to firmware and ICD specifications.
 
 ---
 
@@ -19,405 +19,150 @@ This ADR defines all states, entry/exit conditions, sub-states, backplane signal
 
 ### R1: Main board scope
 
-The main board is a PLC gateway. Its FSM responsibilities are strictly limited to the following functions:
+The main board is the hardware coordinator and host gateway for shared backplane behavior:
 
-| Function | Mechanism |
+| Function | Main-board responsibility |
 |---|---|
-| Arm / disarm the system | Drives EN on the backplane |
-| Generate and distribute clock and sync | Generates CLOCK and SYNC LVDS signals and distributes them point-to-point to all backplane slots |
-| Monitor errors and recovery | Monitors OK bus and LOOP_IN, drives CLEAR |
-| Provide utility converter synchronization capability | Provides the utility DC-DC sync capability defined in ADR-005; converter use and phase offset remain instrument options |
+| Arm and disarm | Drive shared `EN` |
+| Acquisition timing | Generate point-to-point `CLOCK` and `SYNC` |
+| Fault and recovery coordination | Observe `OK` and `LOOP_IN`; drive shared `CLEAR` |
+| Utility-converter timing | Provide the five synchronization outputs defined by ADR-005 |
 
-The main board has no sequencer and no FSM coordination outputs beyond `EN`/`CLEAR`/`SYNC`. Infrastructure outputs (`CLOCK`, `LOOP_OUT`, and the mandatory utility-converter sync capability) are also main-board signals and are defined here or in ADR-005. Whether the backplane utility converters consume those sync outputs and apply phase offsets remains optional. Other control functions (shutter, timing outputs, auxiliary signals) belong to function boards and are intentionally outside this ADR's scope; board-specific behavior for those outputs must be defined in function-board ICDs and future ADRs. Adding sequencer logic to main is explicitly out of scope.
+The main board does not execute detector sequencers or carry science data. Detector-specific clocks, bias, video processing, and other instrument functions belong to function boards.
 
-### R2: Core philosophy
+### R2: Safety layers and clock ownership
 
-> **Go to safe state fast. Go to not-safe state slow.**
+The system follows one principle:
 
-Every signal and state transition in this architecture follows this principle:
+> **Go to safe state fast. Go to armed state deliberately.**
 
-- A detected fault or de-arm condition removes relay-coil drive through the hardware interlock path without intentional delay
-- Arming the system (EN rising, relay closure) → deliberate, gated by initialization completion
-- Fault recovery → requires explicit operator action through ERROR.clear sequence
-- Missing pre-arm readiness (e.g., unsynchronized local converter phase where implemented) is **Not Ready**, not a physical fault, while `EN=0`
-- If armed operation is attempted while Not Ready (`EN=1`), it is treated as an interlock violation and becomes a fault
+Three layers cooperate:
 
-This asymmetry is intentional. A false safe-state trip costs observing time; a false not-safe transition can damage hardware. The architecture is intentionally biased toward safety.
+1. **Hardware interlock:** `OK`, `EN`, normally-open relays, and board-local fail-safe hardware remove hazardous drive without depending on host software or continued FPGA state progression.
+2. **Safety FSM:** FPGA logic implements the common state behavior, readiness gates, fault retention, and recovery coordination from an independent local management clock.
+3. **Host management:** Ethernet supplies commands, configuration, diagnostics, and armed supervision but cannot override an asserted hardware interlock.
 
-The architecture combines a hardware interlock, an FPGA FSM, and slower Ethernet management:
+The management clock shall remain independent of distributed `CLOCK`. Timing-critical sequencer actions use the 100 MHz timing domain; management observes those actions through safe clock-domain crossings. Implementations shall make safety outputs and asynchronous inputs resistant to metastability and glitches, but exact synchronizer, register, and debounce structures are design-specification scope.
 
-- **Hardware Interlock Layer:** Deterministic hardware — open-drain OK fault bus, passive continuity loop, and external relay latch/flip-flop stage (R9). Function-board relay-coil disable is enforced by external asynchronous RESET hardware independent of software and continued FPGA clock operation. Exact detection, propagation, contact-release, and detector-output settling times belong to the system safety analysis and board design verification.
-- **FSM Implementation Constraint (Normative):** Implement the hierarchical safety FSM (`START`, `IDLE`, `RUN`, `ERROR`) in FPGA fabric logic (for example Verilog/VHDL). Software FSM implementations (soft-core/SoC) are prohibited for the safety path because their execution can stall or be delayed.
-- **FSM Clock Domain Constraint (Normative):** The safety FSM, registered safety-path outputs (`OK` driver, `relay_drive`, `EN`), host-supervision timer, and internal clock monitor operate from the **board-local management clock** defined in ADR-004 R5. This clock is continuously independent of the distributed backplane `CLOCK`. Timing-critical sequencer start/stop actions use the distributed 100 MHz timing domain and are reported safely into the management domain.
-- **FSM State Register Constraint (Normative):** Management-domain FSM state storage and update must be atomic: illegal `top_state`/sub-state combinations must be unreachable by construction. `top_state` must derive from the same state storage that determines sub-state behavior; independently updated duplicate state registers are prohibited. Encoding and reference HDL belong in the Firmware Reference Appendix.
-- **Ethernet Management Layer:** Slower and software-driven. Operational writes are allowed only in IDLE. During RUN, Ethernet carries telemetry, ICD-defined host-supervision interactions, disarm, and acquisition trigger requests to main; no configuration writes.
+### R3: Backplane signal behavior
 
-### R3: Backplane signal reference
+| Signal | Driver and topology | Architectural behavior |
+|---|---|---|
+| `OK` | Open-drain contributions from boards and qualified backplane rail-health sources; pull-up on main | HIGH means no participant is asserting a fault. Any participant may pull LOW. A LOW trip has priority over commanded operation. |
+| `LOOP_OUT` / `LOOP_IN` | Passive series continuity path originating and terminating at main | A broken return path causes main to assert its `OK` fault contribution. |
+| `EN` | Main; shared level | HIGH only while the system is armed in `RUN`. LOW means safe/disarmed. Function boards independently qualify a rising edge; falling removes hardware permission without waiting for an FSM transition. |
+| `CLEAR` | Main; shared level/pulse | Requests locally faulted boards to clear retained evidence as appropriate and re-evaluate live conditions. It does not force a board to declare itself healthy. |
+| `CLOCK` | Main clock source; point-to-point LVDS | Continuous 100 MHz sequencer clock. Function boards use it directly for timing-critical work and independently detect its loss. |
+| `SYNC` | Main; point-to-point LVDS | Rising and falling acquisition events are captured in the 100 MHz domain. A separate CDC-safe observation is used for management. Optional pre-arm converter synchronization is defined by ADR-004/ADR-005. |
 
-This table is the authoritative behavioral definition for backplane signals. Other documents reference it rather than redefining signal behavior. Electrical details (voltage levels, drive strength, termination, pinout) remain ICD scope.
+Undriven `EN` and `CLEAR` shall assume their safe LOW levels. Electrical bias, termination, pinout, pulse width, and timing margins belong to the applicable ICD.
 
-| Signal | Driver | Topology | Trigger | Description |
-|---|---|---|---|---|
-| `OK` | Any board or qualified backplane power-good source (open-drain) / pull-up on main | Shared bus | Level (0 = Fault, 1 = Healthy) | Active fault bus. Pulled HIGH by main board resistor. Any participant detecting a fault drives LOW. While armed (`EN=1`), a board also pulls LOW if its host-supervision timer expires. |
-| `LOOP_OUT` | Main FPGA | Daisy-chain | Level (continuous 1) | Origin of the continuity loop. Routes through every slot and extension cable. |
-| `LOOP_IN` | Main FPGA (received) | Daisy-chain | Level (0 = broken, 1 = healthy) | Return path of the continuity loop. Drop triggers main to pull OK LOW. |
-| `EN` | Main FPGA | Shared bus | Level (0 = safe, 1 = armed) | Global arm signal. HIGH in all `RUN.*` sub-states, LOW in all non-RUN states. Main asserts `EN` only after readiness checks pass. On function boards, `EN` is sampled in the local FSM clock domain: arm entry uses a debounced rising-edge qualifier (`N_en_rise_debounce` consecutive samples of `EN == 1` plus local safety/readiness gates), while `EN` falling is not debounced and forces immediate disarm to IDLE. FPGA `relay_drive` ARM control is generated from local sub-state (asserted in RUN.wait/run/stop, de-asserted in all other states), and the external stage in R9 drives the relay coil. |
-| `CLEAR` | Main FPGA | Shared bus | Level (held HIGH for `T_clear_hold`); function boards debounce and trigger on rising edge of debounced output | Synchronized recovery signal. Normally LOW. Main asserts HIGH for `T_clear_hold` (1 ms) to command all function boards to simultaneously drop fault latches and re-evaluate sensors. Function boards sample with a synchronous debouncer (`N_clear_debounce` consecutive FSM clock samples of HIGH) before transitioning. `CLEAR` edges are ignored in all states except `ERROR.run` (mirrors the SYNC ignore rule): a board that has already recovered to `START.wait`/`IDLE` while a retry `clear_error` pulses the shared bus must not react. |
-| `CLOCK` | Main-board clock generator/driver (outside FPGA) | Point-to-point LVDS | Level (continuous) | High-frequency sequencer clock (100 MHz), distributed point-to-point LVDS per slot. Used directly by function boards without PLL multiplication. In `START.wait`, function boards must observe watchdog pet-source activity derived from distributed `CLOCK`, and main must observe activity from its external clock-source monitor, both within `T_clock_present_max = 1 s` (timeout path). After `START.wait` completes, missing/invalid distributed `CLOCK` or failure in the `CLOCK -> divider -> pet` path is classified as F5 (CLOCK/pet-path fault) and propagates through the existing interlock fault path. See ADR-004. |
-| `SYNC` | Main FPGA | Point-to-point LVDS | Edge + state-qualified | Point-to-point LVDS per slot with a fixed relationship to `CLOCK`. In `RUN`, timing-domain capture starts/stops sequencers on defined 100 MHz edges; a CDC-safe observation updates management state and telemetry. In `IDLE`, a rising edge may reset an optional phase-controlled local-converter divider and restart its settling interval. Boards without that requirement treat IDLE `SYNC` as a management event only. SYNC edges during `START.*` and `ERROR.*` have no acquisition meaning. |
-
-**Backplane input handling (normative, all boards):** Every asynchronous backplane input consumed by the management FSM (`OK`, `EN`, `CLEAR`, and the management observation of `SYNC`) must cross safely into the local management clock domain; per-signal debounce requirements are defined in the rows above and in R6. Acquisition `SYNC` is additionally captured directly in the distributed timing domain per ADR-004.
-
-**Undriven-bus safe bias (normative):** The backplane must bias `EN` and `CLEAR` to their safe LOW level whenever they are undriven (main board unpowered, in reset, or reconfiguring), just as `OK` has its defined pull-up on the main board. The electrical implementation (pull-downs, bus keepers) is ICD scope.
-
-Utility voltages (`+3.3V_DIG_AUX`, `+6V_ANA`, `-6V_ANA`, `+16V_ANA`, `-16V_ANA`) and the main-board `UTILITY_DCDC_SYNC[0..4]` outputs are power-infrastructure resources, not FSM state signals. Their generation, naming, connector allocation, optional converter use, and optional phase plan are defined by ADR-005 and the relevant ICD/design package.
-
-#### Signal flow diagram
-
-```mermaid
-flowchart TD
-    subgraph main ["Main Board"]
-        MP["FPGA\n(OK pull-up, LOOP origin)"]
-    end
-
-    subgraph fn1 ["Function Board 1"]
-        F1[FPGA]
-    end
-
-    subgraph fnN ["Function Board N"]
-        FN[FPGA]
-    end
-
-    MP -- "EN, CLEAR (shared bus)" --> F1 & FN
-    MP -. "CLOCK, SYNC (point-to-point LVDS)" .-> F1
-    MP -. "CLOCK, SYNC (point-to-point LVDS)" .-> FN
-    F1 -- "OK (open-drain)" --> MP
-    FN -- "OK (open-drain)" --> MP
-    MP -- "LOOP_OUT" --> F1 -- "loop" --> FN -- "LOOP_IN" --> MP
-```
-
-### R4: Top-level state diagram
-
-START.wait is the single stability gate shared by both boot and fault recovery paths. IDLE ↔ RUN indicates arm (IDLE → RUN.init) and disarm (Any RUN.* → IDLE). Fault from IDLE or any RUN.* sub-state goes directly to ERROR.run. START.boot intentionally ignores OK during startup grace. Recovery from ERROR always passes through ERROR.clear → START.wait → IDLE — there is no direct ERROR → IDLE path.
-
-#### Visual state flow
+### R4: State model
 
 ```mermaid
 stateDiagram-v2
-    direction TB
-
-    %% Main States
-    state START {
-        START.boot --> START.wait : boot_done
-        START.boot --> ERROR.run : local fault abort
-        START.wait --> ERROR.run : qualification timeout / local fault
-    }
-
-    state RUN {
-        RUN.init --> RUN.wait : init_done
-        RUN.wait --> RUN.run : accepted timing-domain SYNC rising event
-        RUN.run --> RUN.stop : accepted timing-domain SYNC falling event
-        RUN.stop --> RUN.wait : run_stop_done
-    }
-
-    state ERROR {
-        ERROR.run --> ERROR.clear : clear_error cmd (main) / debounced CLEAR rising (function)
-        ERROR.clear --> ERROR.run : clear failed / T_clear_max
-    }
-
-    %% Cross-State Transitions
-    START.wait --> IDLE : OK=1 stable + CLOCK qualified
-
-    IDLE --> RUN.init : arm (if readiness passes)
-    RUN --> IDLE : disarm cmd (main) / EN falling (function)
-
-    IDLE --> ERROR.run : OK=0 (any source)
-    RUN --> ERROR.run : OK=0 (any source)
-
-    ERROR.clear --> START.wait : local clear succeeds
+    direction LR
+    [*] --> START
+    START --> IDLE: qualification succeeds
+    START --> ERROR: local fault or qualification fails
+    IDLE --> RUN: arm accepted
+    RUN --> IDLE: disarm
+    IDLE --> ERROR: fault
+    RUN --> ERROR: fault
+    ERROR --> START: explicit clear succeeds
 ```
 
-**Diagram simplification note:** Fault transitions are shown at state level. `OK=0 (any source)` means the shared OK bus was pulled LOW either by an external source (another board/global bus condition) or by an internal source on the local board (for example local hardware fault, supervision timeout, or authorized injected fault). `RUN --> ERROR.run` applies to all `RUN.*` sub-states. `START.boot` intentionally ignores the shared OK bus to allow fleet power-up, but it still enforces immediate abort to `ERROR.run` if a local internal fault occurs (`local_trip_summary == 1`).
+The state families have the following meanings:
 
-### R5: Kill-switch logic
-
-All relay control follows the core philosophy: **go to safe state fast, go to not-safe state slow.**
-
-```
-FAST path (safe):   detected fault → hardware removes relay-coil drive without intentional delay
-SLOW path (armed):  FSM in RUN.wait/RUN.run/RUN.stop with `EN=1` → relay energizes deliberately
-```
-
-**Signal naming convention (normative):**
-1. Unprefixed common signal names (for example `fault_vector`, `local_trip_summary`, `boot_pulldown_active`, `injected_fault`, `ok_fault`, `clear_summary_strobe`) are board-local instances present on both the main board and function boards.
-2. Prefixes are reserved only for board-role-specific signals that are not shared semantics.
-
-**Normative logic constraints (all boards):**
-
-1. **Registered OK driver (mandatory):** The `ok_fault` output driving the open-drain MOSFET must be a registered flip-flop output clocked from the board-local management clock. Raw combinational paths to the OK bus are prohibited (glitch prevention).
-2. **Exactly three FPGA-internal OK sources:** Only the following may contribute to `ok_fault`:
-   - `local_trip_summary` — trip-summary latch (derived from `fault_vector`, which includes hardware fault sources and procedural/supervisory sources such as the EN-rise interlock violation and host-supervision timeout S1)
-   - `boot_pulldown_active` — boot hold-down latch (released after CLOCK qualification in `START.wait`)
-   - `injected_fault` — explicit host-authorized maintenance bit
-3. **External hardware paths are independent:** The fail-safe driver (F2a) and external watchdog (F2b/F5) pull OK LOW through their own open-drain drivers, outside the FPGA `ok_fault` register.
-4. **`boot_pulldown_active` lifecycle:** Initializes to `1` on FPGA power-up/reset; remains asserted through `START.boot` and early `START.wait`; clears only after CLOCK qualification succeeds in `START.wait`. Intentionally not re-asserted on recovery entry (see R7 design rationale).
-5. **Armed host-supervision timeout (S1) is a `fault_vector` source, not a separate OK source:** The board's ICD-defined supervision timer — with its `EN=1` gate internal to the monitor (R6) — sets the dedicated S1 bit in `fault_vector`. Standard R6 fault-path and clear semantics apply; no separate supervision latch exists.
-
-**Main board EN output (normative behavior):** `EN` must be asserted exactly while `top_state == RUN` and de-asserted in all other states.
-
-**Function board relay_drive (normative behavior):** `relay_drive` must be a registered Moore output — no combinational glitches may reach the external relay stage (R9) — asserted only in `RUN.wait`/`RUN.run`/`RUN.stop` and de-asserted in every other state. Reference HDL belongs in the Firmware Reference Appendix.
-
-The integration of the diagnostic layer (`fault_vector`), trip layer (`local_trip_summary`), and registered safety outputs (`ok_fault`) is documented in the Firmware Reference Appendix.
-
-The Golden Rule: a healthy board must never pull OK LOW because the FSM entered ERROR. A board may deliberately drive `OK = 0` only through explicit host-authorized injected-fault control (`set_injected_fault`) used for maintenance verification.
-
-**Key property of the relay logic:**
-- Main board: `EN` (asserted exactly in armed RUN sub-states) is the complete arming output — no separate relay signal
-- Function boards: FPGA `relay_drive` is a pure Moore ARM-control output from sub-state; asserted only in RUN.wait/run/stop (after RUN.init), de-asserted in every other state
-- Physical relay de-energizing is enforced by external RESET-dominant latch/flip-flop logic (`RESET = NOT(EN) OR NOT(OK)`, R9); FSM Moore outputs provide the synchronized control path, and relay physical switching time still dominates end-to-end cutoff
-
-### R6: Timing constants and global FSM rules
-
-**Timing constants (normative):**
-
-| Constant | Nominal value | Meaning |
-|---|---|---|
-| `T_clock_present_max` | `1 s` | Maximum time in `START.wait` to observe CLOCK-qualification evidence (function: first `watchdog_pet_edge_detected()`; main: first `main_clock_edge_detected()`) |
-| `T_pet` | ICD-defined; must satisfy `T_pet ≪ T_clock_present_max` | Period of the watchdog pet signal, derived from the 2 MHz baseline via the dedicated watchdog divider ÷M (ADR-004 R4/R5). The divider ratio that determines `T_pet` is specified in the board ICD. |
-| `T_start_deadline` | `10 s` | Absolute `START.wait` deadline: all qualification gates must pass within this time from `START.wait` entry; starts on entry and never resets |
-| `T_clear_hold` | `1 ms` | Duration the main board holds `CLEAR` HIGH on the backplane. Must be long enough for all supported function boards to complete debounce sampling. |
-| `N_clear_debounce` | ICD-defined (minimum 2) | Number of consecutive FSM clock samples where `CLEAR == 1` required before the function board's debouncer output asserts. Filters backplane glitches. |
-| `N_en_rise_debounce` | ICD-defined (minimum 2) | Number of consecutive FSM clock samples where `EN == 1` required on function boards before accepting arm entry from IDLE. EN falling is not debounced and must take effect immediately. |
-| `T_clear_max` | ICD-defined, with `T_clear_max <= T_start_deadline - T_start_stable` (recommended `T_clear_max <= 0.1 * (T_start_deadline - T_start_stable)`) | Maximum allowed duration of local `ERROR.clear` routine on a faulty board (main or function) |
-| `T_start_stable` | `5 s` | Continuous `OK == 1` stability window required before IDLE |
-| `T_settle` | ICD-defined | Minimum settle time after IDLE `SYNC` phase-reset before arm is valid for a board that implements phase-controlled local conversion. Boards without this requirement define it as not applicable. |
-| `T_sync_min` | ICD-defined | Minimum SYNC HIGH/LOW dwell that guarantees timing-domain capture and management-domain observation on every supported board. |
-| `T_run_init_max` | ICD-defined (recommended initial value `1 ms`) | Worst-case maximum time for any board to complete `RUN.init` after `EN` rises. Main must enforce this as the minimum delay before emitting the first acquisition `SYNC` rising edge in each arm cycle. |
-| `T_host_supervision_max` | ICD-defined | Maximum elapsed time since the last ICD-defined qualifying host interaction before a board pulls `OK` LOW. Enforced only while armed (`EN=1`). |
-| `T_WD_HW_max` | ICD-defined | Maximum expected time for watchdog IC to assert `OK` LOW after pet signal ceases (dependent on watchdog IC timeout setting) |
-| `T_WD_RELEASE_max` | ICD-defined | Maximum allowed time after `resume_watchdog_pets` for a tested board's watchdog path to release and for `OK` to return HIGH (assuming no other active fault source) |
-
-These constants are authoritative for FSM behavior; other documents reference them rather than redefining them.
-
-**Local synchronization readiness (`local_sync_ready`) (normative):**
-- A board that intentionally controls local-converter phase forces `local_sync_ready = 0` on the accepted IDLE `SYNC` event and sets it to `1` only after local `T_settle` expires.
-- Boards without a phase-controlled local converter tie `local_sync_ready = 1`.
-
-**Internal fault-latching architecture on each board (Normative):**
-- `fault_vector` (diagnostic layer): per-source sticky bits set by board-local internal fault/event sources (for example over-current detector, CLOCK-loss monitor, EN-rise interlock violation, or host-supervision timeout S1). Function and main boards retain a role-appropriate clock-loss indication when their respective timing source stops.
-- `local_trip_summary` (trip layer): single local trip-summary latch. This is the only fault-derived signal that feeds the registered FPGA `OK` fault driver.
-- Retained watchdog evidence: a separate diagnostic indication set from the external watchdog status signal. Its exact register representation is implementation-specific.
-
-**Fault-path and clear semantics (normative):**
-1. If any live internal detector trips, its corresponding `fault_vector` bit is set to `1`.
-2. Function-board EN-rise readiness gate violation (any applicable local operational-safety check fails, `local_sync_ready == 0`, or `sequencer_ready == 0` on a sequencer board, at accepted EN rising) must set a dedicated interlock-violation bit in `fault_vector`.
-3. Whenever `fault_vector != 0`, `local_trip_summary` must be set to `1`, regardless of current FSM state.
-4. `local_trip_summary` drives local interlock assertion through the registered `OK` fault driver (`OK` LOW).
-5. Late-arriving-fault rule: if a board is parked in `ERROR.run` due to another board and a local detector trips, `fault_vector` sets and `local_trip_summary` asserts; that board then actively contributes to `OK` LOW and is treated as locally faulty during recovery.
-6. On `ERROR.run → ERROR.clear` entry, the board must clear `fault_vector = 0` (prime-for-recheck), force `injected_fault = 0`, and resume watchdog petting as failsafe cleanup.
-7. On `ERROR.run → ERROR.clear` entry, `local_trip_summary` must **not** be cleared.
-8. During `ERROR.clear`, live detectors continue running; any still-present or new fault re-sets the corresponding `fault_vector` bit(s).
-9. On the `ERROR.clear` exit evaluation boundary: if `fault_vector == 0`, transition to `START.wait` and assert `clear_summary_strobe` exactly on that transition boundary (clears `local_trip_summary`); clear retained watchdog evidence at this success boundary as well. It is additionally cleared at the `START.wait → IDLE` qualification-success boundary, so watchdog trips that legitimately occurred during boot do not persist into IDLE/RUN diagnostics.
-10. On the `ERROR.clear` exit evaluation boundary: if `fault_vector > 0`, transition to `ERROR.run`; keep `local_trip_summary = 1` and retain the fault vector and watchdog evidence for host diagnosis in the next `ERROR.run`.
-11. Clock-loss source bits participate in the normal `fault_vector -> local_trip_summary -> ok_fault` path. The watchdog observer indication is diagnostic only because the external watchdog already owns an independent hardware connection to `OK`.
-
-```mermaid
-flowchart LR
-    DET["Live internal detector i"] --> BFV["Set fault_vector[i]"]
-    BFV --> SUM["local_trip_summary <= 1"]
-    SUM --> OKDRV["Registered OK fault driver"]
-    OKDRV --> TRIP["OK=0 -> interlock trip"]
-    WDT["External watchdog timeout path"] --> TRIP
-    BFV --> SRC["Fault-source bits available in ERROR.run"]
-    WDS["Watchdog status indication"] --> WD["Retain watchdog evidence"]
-    WD --> SRC
-```
-
-**Armed host-supervision rule (normative):**
-1. Each board maintains a host-supervision timer in its independent management domain.
-2. The timer is refreshed only by an ICD-defined valid host interaction. The qualifying interaction may be a telemetry request, explicit heartbeat, data acknowledgement/credit, or another protocol operation that demonstrates active host communication.
-3. Supervision timeout is enforced only while armed (`EN=1`).
-4. If elapsed time exceeds `T_host_supervision_max`, that board sets the dedicated S1 bit in `fault_vector`; the standard fault path asserts `OK` LOW and forces global transition to `ERROR.run`.
-5. The board returns an ICD-defined response so the host can verify the board-to-host path. Exact message choice, cadence, retry policy, and timeout are ICD-defined.
-6. The S1 bit follows the standard `fault_vector` clear semantics and cannot re-set during `ERROR.clear` because supervision is enforced only while armed.
-
-**EN edge handling rule on function boards (normative):**
-1. Sample/synchronize backplane `EN` in the local FSM clock domain.
-2. Accept arm-entry from IDLE only on debounced `EN` rising (`N_en_rise_debounce` consecutive samples where `EN == 1`) together with the safety/readiness guards in R8.
-3. Do not debounce `EN` falling. The first sampled `EN == 0` from any `RUN.*` state must trigger the immediate `RUN.* → IDLE` disarm transition.
-
-### R7: State definitions and phase guards
-
-#### START
-**EN = 0 | Safe**
-
-This is the initial power-up phase. During `START.boot`, `OK` is intentionally ignored because boards may legitimately hold it LOW while booting. Reacting to `OK` here would cause false ERROR trips on simultaneous startup. Each board keeps `boot_pulldown_active = 1` through `START.boot` and into early `START.wait`. Release is allowed only after START.wait CLOCK qualification succeeds (function: `watchdog_pet_edge_detected()`, main: `main_clock_edge_detected()`).
-
-| Sub-state | Description |
+| State | Meaning |
 |---|---|
-| START.boot | FPGA/SoC boots using a local independent management clock domain. Reads and validates persistent identity, network, and required factory data; applies network configuration and brings Ethernet up. Initializes volatile operational parameters to safe firmware defaults and clears sequencer state. Watchdog pet source belongs to the 2 MHz baseline ÷M watchdog divider (per ADR-004 R4), while startup grace keeps CLOCK-loss/qualification fault handling out of this sub-state. Keeps `boot_pulldown_active` asserted and transitions to START.wait with OK still held LOW. |
-| START.wait | Timeout-driven qualification gate shared by boot and recovery. Two independent gates must both pass within the absolute deadline `T_start_deadline`. See gate summary below. |
+| `START.boot` | Initialize board identity, communications, safe defaults, and local monitoring. The system remains unarmed. |
+| `START.wait` | Qualify required timing activity and stable shared health before permitting `IDLE`. Used after boot and after recovery. |
+| `IDLE` | Safe and configurable. Relays are open and `EN=0`. |
+| `RUN.init` | Arm-entry preparation after `EN` rises. |
+| `RUN.wait` | Armed and ready for an acquisition `SYNC` event. |
+| `RUN.run` | Acquisition active. |
+| `RUN.stop` | Complete the board-specific graceful stop before returning to `RUN.wait`. |
+| `ERROR.run` | Latched safe hold with diagnostic evidence available. |
+| `ERROR.clear` | Explicit local clear and live-fault re-evaluation attempt. |
 
-**START.wait qualification gates:**
+Board designs may implement equivalent internal substates differently, but their external behavior shall match these meanings.
 
-START.wait enforces two independent conditions. Both must pass within the absolute deadline (`T_start_deadline` = 10 s) before the board may transition to IDLE.
+### R5: Fault, trip, and recovery invariants
 
-| # | Gate | Condition | Individual timeout | Reset behavior |
-|---|------|-----------|-------------------|----------------|
-| 1 | CLOCK qualification | Function boards: ≥1 pet edge detected since START.wait entry. Main board: ≥1 edge detected on external CLOCK-source monitor since START.wait entry (`main_clock_edge_detected()`). | `T_clock_present_max` (1 s) → ERROR.run | Once qualified, stays qualified permanently for this START.wait pass |
-| 2 | OK stability | `OK == 1` continuously for `T_start_stable` (5 s) | Bounded by `T_start_deadline` only | Each `OK` drop restarts the stability counter; the deadline never resets |
+1. A detected local safety-relevant fault shall assert that board's contribution to `OK` and retain enough evidence for diagnosis.
+2. `OK=0` or `EN=0` shall remove function-board relay drive through the hardware permissive path in R9 without waiting for an FSM transition.
+3. A board shall not release a local trip merely because the initiating condition disappears. Release is permitted only during explicit recovery after live conditions have been re-evaluated successfully.
+4. A board already in `ERROR` because another participant tripped shall still record and assert any later local fault.
+5. A healthy board shall not pull `OK` LOW solely because it observed the shared bus LOW or entered `ERROR` due to another participant.
+6. Successful recovery returns through `START.wait`; there is no direct `ERROR` to `IDLE` path.
+7. Restoring a rail, clock, communication link, or other fault source never resumes acquisition automatically.
+8. Diagnostic representation and internal latch structure are implementation-specific.
 
-**Local-fault fast-abort rule (normative):**
-While in `START.boot` or `START.wait`, a board must abort immediately to `ERROR.run` if `local_trip_summary == 1`. START tolerance for `OK == 0` applies only to fleet-level/external bus behavior, not to known local faults.
+During initial fleet startup, participants may legitimately hold `OK` LOW while their local interlock paths initialize. Startup behavior shall prevent arming until all required participants release the bus and the qualification conditions remain stable.
 
-**Absolute deadline** = `T_start_deadline` = 10 s. This is the hard backstop. If both gates have not passed by this time → ERROR.run. The deadline starts on START.wait entry and never resets. A fleet whose `OK` never rises is caught here (stability can never complete), so no separate OK-rise timeout exists.
+### R6: Timing parameters
 
-**Timeout diagnostic visibility (normative):** Each START.wait timeout path must set a dedicated diagnostic bit in `fault_vector` on the transition to `ERROR.run`: CLOCK qualification timeout sets the existing F5/CLOCK-source bit; the `T_start_deadline` timeout sets a dedicated START.wait-deadline bit. Without these bits, a board that timed out would present as "dragged into ERROR by another board" (ADR-001 R6/R10). These bits are timeout-event records, not live detectors: per R6 clear semantics they are primed to `0` on `ERROR.clear` entry and do not re-set during `ERROR.clear`, so a past timeout cannot block recovery. A deliberate consequence is that a timed-out board holds `OK` LOW through `ERROR.*` (via `local_trip_summary`) like any locally faulted board. *Optional (ICD):* boards may expose an `ok_seen_high` telemetry flag to let the host distinguish "OK never rose" from "OK rose but never stabilized" after a deadline timeout.
+The architecture requires the following bounded behaviors, but their values are defined by the system or board ICD from verified hardware and operational requirements:
 
-No separate OK-rise or early-abort rule is required: the absolute deadline already covers an OK signal that never rises or cannot remain stable long enough. Timer implementation and test scenarios belong in the Firmware Reference Appendix.
+| Parameter | Required purpose |
+|---|---|
+| Clock-qualification timeout | Detect missing required timing activity during `START.wait` |
+| Startup deadline | Prevent indefinite startup or recovery qualification |
+| Stable-health interval | Require continuously valid `OK` before entering `IDLE` |
+| `CLEAR` pulse width | Ensure recognition by every supported board |
+| Clear-attempt timeout | Bound local recovery work |
+| Arm-to-first-trigger guard | Give the slowest supported board time to finish `RUN.init` |
+| Host-supervision timeout | Bound loss of qualifying host interaction while armed |
+| Watchdog timeout and test-release time | Verify external watchdog response |
+| Optional converter settling time | Prevent arming before an intentionally phase-controlled converter is ready |
 
-**Design rationale - boot_pulldown_active asymmetry:** `boot_pulldown_active` is asserted only on physical FPGA power-up/reset and is intentionally **not** re-asserted when entering `START.wait` from `ERROR.clear`. This allows a clean `OK` release exactly at the successful `ERROR.clear -> START.wait` boundary without introducing an artificial extra hold-down phase. Safety is preserved because no board can reach `IDLE` without passing the `clock_qualified` gate, and missing CLOCK during recovery still deterministically trips via `T_clock_present_max` timeout back to `ERROR.run`. Implementations must not "symmetrize" this latch by re-asserting it on recovery entry.
+Timeout boundaries, debounce counts, counter implementation, and diagnostic-bit allocation belong to the firmware and ICD specifications.
 
-**START.wait is shared between two paths:**
+### R7: Arming, acquisition, and disarming
 
-```mermaid
-flowchart LR
-    START.boot --> START.wait
-    ERROR.clear --> START.wait
-    START.wait --> IDLE
-    START.wait -- "qualification timeout\n(CLOCK/OK/stability)" --> ERROR.run
+The host commands `arm` to the main board. Main checks its local requirements and asserts `EN` only from `IDLE`. Each function board then independently accepts the `EN` rising edge only if its applicable safety and readiness conditions are valid. A board that detects an unsafe arm attempt trips through `OK`; no separate backplane readiness bus is required.
+
+Main shall not emit the first acquisition `SYNC` until the ICD-defined arm-to-first-trigger guard has elapsed. This guard covers `EN` recognition and the worst-case `RUN.init` completion time across the installed fleet.
+
+In `RUN`, a rising acquisition `SYNC` starts the timing action and a falling `SYNC` stops it according to ADR-004. A disarm command makes main drop `EN`; function-board hardware removes relay drive without waiting for FSM cleanup, and boards return to `IDLE` for any residual cleanup.
+
+Operational writes and sequencer loading are permitted only while safely disarmed as defined by ADR-002. Exact command names, acknowledgements, and rejection responses belong to the communication ICD.
+
+### R8: Armed host supervision and maintenance tests
+
+Every armed active board shall require an ICD-defined qualifying host interaction within a bounded interval. The interaction must demonstrate communication in both directions; unsolicited outbound traffic alone is insufficient. Timeout is a supervisory interlock event that uses the normal local trip path.
+
+The system shall also support safe maintenance verification of board `OK` and watchdog paths. Tests are performed only while disarmed or already latched safe. Exact commands, sequencing, cadence, and acceptance timing belong to the system ICD and maintenance plan.
+
+### R9: Function-board relay permissive
+
+A function-board detector-facing relay may energize only when all required hardware permissives are true:
+
+```text
+relay_energized = local_arm_request AND EN AND OK
 ```
 
-**Timer boundary convention (normative):** In this ADR, "within `T_x`" means `t_event <= T_x` (inclusive). Timeout applies when `t_event > T_x`.
+Loss of `EN`, loss of `OK`, or loss of local interlock power shall remove relay drive independently of processor software, FPGA state progression, and distributed `CLOCK`. Relays shall be normally open so complete board-power loss is safe. Energization shall be deliberate and glitch-resistant; de-energization shall not require completion of an FSM transition.
 
-#### IDLE
-**EN = 0 | Safe**
+A reset-dominant latch or flip-flop is one compliant implementation, not an architectural requirement. Circuit topology, polarity, relay driver, and component selection belong to the board hardware design specification.
 
-Default resting state with all relays open. Host-supplied operational settings and sequencers remain active across arm/disarm and fault recovery until changed or the board resets. Persistent configuration remains UART-only per ADR-002.
+---
 
-- Operational parameters and sequencer memory writable via Ethernet only in IDLE
-- UART accessible under the ADR-002 R5 read/write state allowlist
-- Host verifies board readiness and, on sequencer boards, `sequencer_ready` before arm
-- On boards that implement phase-controlled local converters, a `SYNC` rising edge in IDLE (`EN=0`) may reset only the optional converter divider. Main enforces the ICD-defined SYNC pulse-width constraint (`T_sync_min`), and affected boards wait any required `T_settle` before arm is permitted (ADR-004 R4). Watchdog divider phase is not reset.
-- IDLE pre-arm `SYNC` is host-driven: host sends `send_pre_arm_sync` to main; main emits one pulse and does not generate IDLE `SYNC` autonomously
-- Operator sends `arm` via Ethernet to the main board only. Main checks its applicable local readiness and operational-safety conditions and, if ready, asserts `EN = 1` → RUN.init
-- Operator may start F4 maintenance verification by sending `set_injected_fault` to a selected board (allowed only in IDLE/ERROR.run)
-- Any fault (OK = 0) → ERROR.run
+## Reference Material
 
-**SYNC behavior in IDLE (normative):**
-1. Applies only when `top_state == TOP_IDLE` and `EN = 0`
-2. IDLE pre-arm `SYNC` pulse is host-driven: remote host sends `send_pre_arm_sync` to main; main emits one pulse, must hold the HIGH segment for at least `T_sync_min`, and must not free-run/spam `SYNC` while in IDLE
-3. A board that implements an optional phase-controlled local converter captures the rising edge in the 100 MHz timing domain and resets only that converter's divider. Other divider phase is unchanged.
-4. Such a board updates `local_sync_ready` according to the R6 local synchronization readiness rule. Boards without this feature tie the signal TRUE.
-5. As the recommended operational workflow, the host should arm only after required boards report ready. This recommendation is not the safety boundary: each function board independently enforces its applicable readiness flags on `EN` rising and trips on violation.
-6. `SYNC` falling edge in IDLE has no acquisition meaning and is ignored by boards while in IDLE
-7. Before asserting `EN`, the main board must ensure `SYNC` is LOW so that function boards, once they reach `RUN.wait`, can detect a clean rising edge to start acquisition
-8. Main must enforce `T_sync_min` on both HIGH and LOW SYNC dwell segments around the pre-arm pulse so all boards deterministically capture transitions
-
-**Readiness and CLOCK semantics in IDLE (normative):**
-1. `local_sync_ready == 0` in IDLE is a **Not Ready** condition, not a fault condition
-2. While `EN=0`, a board in Not Ready does not pull `OK` low solely due to missing local converter phase sync
-3. In `START.wait`, missing CLOCK is handled by timeout gating (`T_clock_present_max`), not by immediate fault transition
-4. After `START.wait` completes, missing `CLOCK` is a fault condition on both board roles: function boards detect distributed CLOCK loss with an independent management-domain activity monitor; the main board detects external CLOCK-source failure with its continuous source monitor. Both record clock-loss evidence and propagate through the normal `OK == 0` fault path (R8).
-
-**Arm-readiness enforcement:** The host polls each required function board before commanding arm. The main soft-rejects its own failed checks and remains in IDLE; function boards independently enforce their applicable checks on `EN` rising and trip on violation. No backplane signal reports function-board readiness to main. Exact guards and outcomes are owned by the R8 transition reference.
-
-**Volatile operational configuration (normative):** Boards initialize operational parameters to safe firmware defaults. In `IDLE`, each accepted Ethernet write is validated and applied atomically; an invalid write is rejected without changing the active value. At arm, boards evaluate their actual current operational-safety conditions. `sequencer_ready` separately follows ADR-002 R9 as a host-controlled loading-complete interlock. No configuration hash or per-arm attestation token is used.
-
-#### RUN
-**EN = 1 | Armed**
-
-The system is armed (`EN=1`) in all `RUN.*` sub-states. Disarm exits directly to IDLE: `EN` drops, and relays open immediately through the hardware reset path.
-
-| Sub-state | Trigger | Description |
-|---|---|---|
-| RUN.init | EN rising accepted by local EN-rise qualifier (function boards use `N_en_rise_debounce`; main enters on accepted arm command) | Arm-entry initialization: flush ADCs, apply bias voltages, pre-load sequencers, reset counters. (Watchdog divider reset, and local DC-DC phase reset where implemented, is performed earlier in IDLE; see ADR-004 R4.) |
-| RUN.wait | RUN.init complete | Hardware ready; the acquisition timing domain observes `SYNC`, while the management domain receives a CDC-safe observation for state and telemetry. |
-| RUN.run | Accepted timing-domain `SYNC` rising event | Sequencers start on the defined 100 MHz timing edge and data acquisition begins. Boards with synchronized local converters have already established their phase relationship during IDLE pre-arm SYNC; backplane utility-converter synchronization, when used, is handled by the main-board `UTILITY_DCDC_SYNC[0..4]` outputs defined in ADR-005. |
-| RUN.stop | Accepted timing-domain `SYNC` falling event | Graceful stop: halt capture, bleed integration capacitors, zero counters → return to RUN.wait |
-
-**Disarm (normative):** On disarm command (main) or backplane `EN` falling edge (function, any `RUN.*`, no debounce), the board transitions directly to IDLE. Relays open immediately via the `EN=0` hardware reset path before any FSM action; residual cleanup (bleeding integrators, zeroing counters) is performed as IDLE-entry actions.
-
-Any fault (OK = 0) during RUN → immediately ERROR.run.
-
-Host supervision is mandatory while armed on all boards. Each board refreshes its timer only after an ICD-defined valid host interaction and returns an ICD-defined response so the host can verify the reverse path. If the timer expires, that board asserts `OK` low and forces `ERROR.run` globally. Unsolicited outbound traffic alone does not refresh the timer.
-
-**First acquisition-trigger guard (normative):**
-1. Let `t_en_rise` be the clock when main asserts `EN = 1` (IDLE → RUN.init arm boundary)
-2. There is no backplane "all boards RUN.wait-ready" feedback signal
-3. Therefore main must not emit the first acquisition `SYNC` rising edge of that arm cycle before `t_en_rise + T_run_init_max`
-4. `T_run_init_max` must be selected to be greater than or equal to the worst-case RUN.init completion time among all boards in the fleet (ICD-defined). Because the budget starts at main's `EN` assertion, it must also cover the function-board EN-rise qualification time (`N_en_rise_debounce` samples in the slowest management clock domain) that elapses before RUN.init even begins
-5. If host requests trigger earlier, main must delay that first trigger until the guard is satisfied
-
-`EN`-rise readiness checks are normative in the R8 transition reference.
-
-#### ERROR
-**EN = 0 | Latched fault**
-
-Entered on any fault transition to `ERROR.run` defined in R8. Main drops `EN = 0`.
-
-**Important:** On function boards, physical relay cutoff is guaranteed by the external RESET-dominant latch/flip-flop stage (R9): RESET asserts when `EN = 0` or `OK = 0`, forcing coil drive LOW independently of FPGA clock progression. In parallel, the management FSM de-asserts FPGA `relay_drive` as it leaves RUN.*. On the main board, `EN` drops when `top_state` leaves RUN.
-
-| Sub-state | Description |
-|---|---|
-| ERROR.run | Latched safe hold state, entered directly on any fault transition. On entry — as Moore consequences of leaving RUN/IDLE, not as sequenced actions — `EN` drops, FPGA `relay_drive` de-asserts, and the external relay RESET is active (`EN=0` and/or `OK=0`) so coil drive is forced LOW. Fault evidence is retained; there is no latch clearing or OK release. Operator polls diagnostics via Ethernet, including retained clock-loss and watchdog evidence for F5/F2b differentiation (ADR-001 R6). Waits for `clear_error` command. |
-| ERROR.clear | Recovery attempt. Behavior defined by R6 rules 1–11 and the R8 transition reference. |
-
-`ERROR.clear` behavior is owned by the R6 fault-path/clear rules and the R8 transition reference. A locally faulted board holds `OK` LOW until the successful `ERROR.clear → START.wait` boundary. `T_clear_max` remains constrained by the R6 timing table so healthy boards retain enough `START.wait` stability time. A physical F1 loop break prevents successful clear while `LOOP_IN` remains LOW. Procedural implementation belongs in the Firmware Reference Appendix.
-
-#### F4 Driver Verification (No Separate State)
-**EN = 0 | Maintenance (IDLE + ERROR.run flow)**
-
-F4 verification uses command-controlled faults, not a dedicated state. `set_injected_fault` / `clear_injected_fault` tests the FPGA driver; `halt_watchdog_pets` / `resume_watchdog_pets` tests the independent watchdog driver and timer. Command state windows and cleanup semantics are owned by the R8 transition reference; the host procedure and timing checks are system-ICD scope.
-
-**Inherent assurance limitation:** `halt_watchdog_pets` requires a functioning FPGA to execute the halt. It verifies watchdog timer logic and physical open-drain drive, but it cannot prove behavior under true FPGA-dead conditions (F2a/F2b boundary cases). Brain-dead assurance comes from `V_SAFE_AON`, the independent watchdog/fail-safe path, and component reliability requirements in ADR-001.
-
-### R8: Transition and command reference
-
-The exhaustive transition table, command split rules, clock-loss propagation note, and EN-rise safety-gate detail are kept in:
-
-[ADR-003_transition_reference.md](reference/ADR-003_transition_reference.md)
-
-That reference is authoritative when R7 summary text and detailed transition rules overlap.
-
-For peer review of the architecture, the main invariants are:
-
-1. Fault/interlock paths have priority over commanded transitions in `IDLE` and `RUN.*`.
-2. Function boards enter RUN only from a debounced backplane `EN` rising edge plus applicable local safety/readiness gates.
-3. Main-only Ethernet commands (`arm`, `disarm`, `clear_error`, `send_pre_arm_sync`, and the ICD-defined acquisition trigger start/stop requests that command RUN `SYNC` edges) are not consumed as arming commands by function boards.
-4. Maintenance fault-injection/watchdog-test commands are legal only in `IDLE` and `ERROR.run`.
-5. `ERROR.clear` releases local fault summaries only at the successful `ERROR.clear -> START.wait` boundary.
-
-### R9: External relay latch/flip-flop stage for function board relay drive
-
-Each function board relay arm path uses an external latch/flip-flop with asynchronous reset as a hardware-independent de-arm mechanism. This closes the gap where a brain-dead FPGA condition can leave `relay_drive` asserted because Moore outputs cannot advance without clock progress, while the watchdog still pulls `OK` LOW and trips the rest of the system.
-
-**Normative requirements:**
-
-- **Q (output):** Sole driver of the relay coil. HIGH = relay armed.
-- **ARM input:** Registered FPGA output (same guardrail as the OK driver, ADR-001 R4). Asserted only after `RUN.init` completes (at `RUN.wait` entry) — the same timing point as the existing `relay_drive` assertion.
-- **Asynchronous RESET:** Active when `EN = 0` OR `OK = 0`. **RESET is dominant over ARM** — the output can only be HIGH when both `EN = 1` AND `OK = 1`.
-- **Power supply:** The latch/flip-flop IC and RESET-path logic shall use the board-local `V_SAFE_AON` supply defined by ADR-001 R9, not an FPGA/processor rail.
-- **Relay type:** Normally-open (energized to arm). Complete board power loss de-energizes the relay mechanically, independent of latch state.
-- **FPGA `relay_drive`:** Becomes the ARM control signal. It no longer drives the relay coil directly.
-
-For a reference schematic implementation using a D flip-flop and an open-drain wired-AND reset generator, refer to the Hardware Design Specification.
-
-**Scope note:** This constraint applies to function board relay drive. The main board has no separate relay — `EN` is its sole arming output (R5); main board relay architecture is outside this constraint.
+[ADR-003_transition_reference.md](reference/ADR-003_transition_reference.md) is a non-normative implementation reference. It may illustrate one detailed transition implementation but cannot add requirements beyond this ADR.
 
 ---
 
 ## Decision
 
-*Resolved. Core states (START, IDLE, RUN, ERROR), transition priorities and reference rules, injected-fault maintenance command model, kill-switch logic, and external relay latch/flip-flop stage requirement for function boards (R9) are settled. While armed, host-supervision timeout on any board trips globally via `OK` pull-down.*
+Resolved. The common state families, external backplane-signal behavior, fault and recovery invariants, armed host supervision, timing-parameter ownership, and hardware relay permissive are architectural. Internal registers, exact timers, debounce logic, command framing, and circuit topology are delegated to ICD and design specifications.
 
 ---
 
 ## Consequences
 
-- Firmware on all boards must implement the transition priority model and guards exactly as specified.
-- The main board Ethernet API must return explicit arm-rejection responses (Not Ready + reasons) when readiness checks fail.
-- Function boards must enforce EN-rise readiness checks and convert violations into interlock faults via `OK` pull-down.
-- ICD must define which host interactions qualify for supervision refresh, the required board response, cadence, retry policy, and timeout tuning.
-- Verification must include transition-coverage tests for nominal flow, rejected arm attempts, and reboot-edge cases.
-- Each function board shall implement an external reset-dominant latch or D flip-flop stage powered from `V_SAFE_AON` as the sole relay coil driver, with ARM from a registered FPGA output and asynchronous RESET from `NOT(EN) OR NOT(OK)` (R9).
+- All boards expose consistent arm, fault, recovery, and acquisition behavior without requiring identical HDL structure.
+- The system and board ICDs must define timing values, communication details, readiness conditions, and diagnostic schemas.
+- Verification must demonstrate safe transition priority, rejected unsafe arm attempts, bounded startup/recovery, host-supervision timeout, and hardware relay de-energization.
