@@ -1,0 +1,25 @@
+\chapter{Shared-Signal Summary}
+\label{app:signals}
+
+The table below is extracted from ADR-003 and provides a compact view of the shared coordination signals. It summarizes architectural behavior only. Electrical levels, pin assignments, biasing, termination, pulse widths, timing margins, and inter-backplane implementation belong to the applicable ICDs.
+
+\input{handbook/generated/shared_signals.tex}
+
+\begin{table}[htbp]
+\centering
+\footnotesize
+\begin{tabularx}{\textwidth}{@{}>{\raggedright\arraybackslash}p{0.17\textwidth}>{\raggedright\arraybackslash}p{0.27\textwidth}>{\raggedright\arraybackslash}X@{}}
+\toprule
+\textbf{Signal} & \textbf{Driver and topology} & \textbf{Architectural behavior} \\
+\midrule
+\GeneratedSharedSignalRows
+\bottomrule
+\end{tabularx}
+\caption{Shared-signal behavior extracted from ADR-003 R3 during the publication build.}
+\end{table}
+
+Five point-to-point utility-converter synchronization pairs, numbered 0 through 4, are also part of the standard main-board/backplane interface. They synchronize backplane utility-converter channels during acquisition. Their signal names, mapping, divisors, phase behavior, and electrical implementation are defined by the backplane ICD under ADR-005.
+
+A function board may additionally derive compatible local converter clocks from its point-to-point \texttt{CLOCK}. A \texttt{SYNC} pulse received while \texttt{EN=0} may align those local dividers in any local board state. With \texttt{EN=1}, \texttt{SYNC} has acquisition meaning only. This optional board-local use is defined by ADR-004 and does not consume or redefine the five backplane utility-converter synchronization pairs.
+
+Board-local watchdog, fail-safe, relay-control, and voltage-supervisor signals are not shared backplane signals. Their internal names and implementation belong to board design specifications.

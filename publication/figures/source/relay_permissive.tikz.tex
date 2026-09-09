@@ -1,0 +1,35 @@
+% Figure ID: relay-permissive
+% Reader question: What must remain true for a detector protection relay to stay energized?
+% Controlling sources: ADR-003 R9 and ADR-001 R9.
+% Status: Derived, non-normative explanation.
+% Required concepts: local request, shared EN, shared OK, local interlock power,
+% hardware permissive, normally-open relay, safe loss of any permission.
+% Avoid implying: one mandatory gate or latch circuit; processor software is in
+% the final safety path; all detector interfaces use the same relay component.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=7mm and 13mm]
+  \node[noirlab function board] (local) {Board-local\\arm request};
+  \node[noirlab main board,below=of local] (en) {Shared \texttt{EN}\\from main};
+  \node[noirlab block,below=of en,draw=black,very thick] (ok) {Shared \texttt{OK}\\fault bus};
+
+  \node[noirlab block,right=22mm of en,minimum width=31mm] (logic) {Hardware\\permissive};
+  \node[noirlab block,above=of logic] (vint) {Local interlock power\\\texttt{V\_INTERLOCK\_LOCAL}};
+  \node[noirlab block,right=18mm of logic,draw=NOIRLabAlertRed] (relay) {Normally-open\\relay};
+  \node[noirlab function board,right=of relay] (output) {Detector-facing\\output enabled};
+
+  \draw[noirlab safety flow] (local.east) -- (logic.west);
+  \draw[noirlab safety flow] (en.east) -- (logic.west);
+  \draw[noirlab safety flow] (ok.east) -- (logic.west);
+  \draw[noirlab power flow] (vint) -- (logic);
+  \draw[noirlab safety flow] (logic) -- node[above,font=\scriptsize,fill=white,inner sep=1pt] {coil permission} (relay);
+  \draw[noirlab power flow] (relay) -- (output);
+
+  \node[font=\small,align=center,below=15mm of logic] {Relay energized only when\\\texttt{local\_arm\_request AND EN AND OK} is true.};
+  \node[font=\scriptsize,align=center,below=27mm of logic] {Loss of any input or local interlock power removes permission through hardware.};
+\end{tikzpicture}
+\end{document}

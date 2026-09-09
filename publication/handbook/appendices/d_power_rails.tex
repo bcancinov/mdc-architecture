@@ -1,0 +1,46 @@
+\chapter{Power-Rail Summary}
+\label{app:power-rails}
+
+The power architecture separates the external input, protected bulk distribution, common utility rails, and board-local supplies. This appendix is a navigation aid; ADR-005 and ADR-001 remain authoritative.
+
+\section{System Input and Protected Bulk Rail}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries\raggedright\arraybackslash}p{0.20\linewidth}>{\raggedright\arraybackslash}p{0.22\linewidth}X@{}}
+\toprule
+Rail & Owner/location & Purpose \\
+\midrule
+\texttt{+12V\_IN} & External input to backplane & Unprotected system input before the central eFuse \\
+\texttt{+12V} & Backplane output after central eFuse & Protected bulk supply for utility converters and active boards; source for high-current and specialized board-local conversion \\
+\bottomrule
+\end{tabularx}
+
+The central backplane eFuse is the system input circuit breaker. It disconnects if protected \texttt{+12V} cannot remain within the verified input range of downstream converters. Its detailed thresholds, current limits, delays, ratings, supervision method, and retry or latch behavior are implementation decisions. A normal interlock or common utility-rail trip removes detector-facing permission but does not command the eFuse to remove system power.
+
+\section{Mandatory Common Utility Rails}
+
+\input{handbook/generated/utility_rails.tex}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries\raggedright\arraybackslash}p{0.25\linewidth}X@{}}
+\toprule
+Rail & Intended use \\
+\midrule
+\GeneratedUtilityRailRows
+\bottomrule
+\end{tabularx}
+
+The utility-rail rows are extracted directly from ADR-005 during the build. A standard backplane generates the complete set even when an installed board does not consume every rail. Exact voltage tolerances, capacity, ripple, transient, connector, and per-slot limits belong to the backplane ICD.
+
+\section{Board-Local Supplies}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries\raggedright\arraybackslash}p{0.25\linewidth}X@{}}
+\toprule
+Supply class & Architectural role \\
+\midrule
+\texttt{V\_INTERLOCK\_LOCAL} & Low-power supply derived on every active board from protected \texttt{+12V}. It powers only the independent watchdog, fail-safe \texttt{OK} path, power-loss protection hardware, and relay-reset support where applicable. It is not distributed by the backplane. \\
+Digital point-of-load rails & All ordinary digital supplies, including identification, monitoring, management, processor, FPGA, and memory rails, generated locally from protected \texttt{+12V}. The standard backplane does not distribute a low-voltage digital utility rail. \\
+Specialized detector rails & Non-common voltages generated locally when required by a detector-facing board and controlled by that board's ICD and design specification. \\
+Analog conditioning and local regulation & Filters, LDOs, or other circuits used to meet incoming-noise and returned-disturbance limits at a shared utility-rail boundary. \\
+\bottomrule
+\end{tabularx}
+
+Shared rail health is owned by the backplane and contributes directly to \texttt{OK}. The main board measures common voltages for diagnosis. Board-local supervision is added only where a safety-relevant function is not already covered by the fail-safe or watchdog paths.

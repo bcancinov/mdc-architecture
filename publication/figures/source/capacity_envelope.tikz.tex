@@ -1,0 +1,30 @@
+% Figure ID: capacity-envelope
+% Reader question: Why does slot count alone not define supported system size?
+% Controlling sources: ADR-002, ADR-004, ADR-005, and ADR-006.
+% Status: Derived, non-normative explanation.
+% Required concepts: several simultaneous budgets; installed configuration;
+% verification against every applicable limit.
+% Avoid implying: fixed numerical limits; equal weighting; one universal maximum;
+% spare mechanical slots guarantee usable capacity.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=8mm and 10mm]
+  \node[noirlab main board,minimum width=47mm,minimum height=17mm] (supported) {Supported instrument\\configuration};
+
+  \node[noirlab block,above left=11mm and 19mm of supported] (power) {Power\\budget};
+  \node[noirlab block,above=11mm of supported] (thermal) {Thermal\\budget};
+  \node[noirlab block,above right=11mm and 19mm of supported] (timing) {Timing\\margin};
+  \node[noirlab block,below left=11mm and 19mm of supported] (interfaces) {Electrical and\\connector limits};
+  \node[noirlab block,below=11mm of supported] (mechanical) {Mechanical and\\environmental limits};
+  \node[noirlab block,below right=11mm and 19mm of supported] (data) {Network, host,\\and data capacity};
+
+  \foreach \limit in {power,thermal,timing,interfaces,mechanical,data}
+    \draw[noirlab data flow] (\limit) -- (supported);
+
+  \node[font=\scriptsize,align=center,below=7mm of mechanical] {All applicable limits must be satisfied together.\\Unused slots do not imply unused capacity.};
+\end{tikzpicture}
+\end{document}

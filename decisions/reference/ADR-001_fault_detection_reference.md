@@ -8,57 +8,34 @@ ADR-001 is the peer-review entry point for the health-detection decision. This f
 
 ## Example watchdog and clock monitor architecture
 
-This example shows a cascaded implementation of the required two-domain liveness behavior. Other implementations are acceptable. In this example, the timing-domain source differs by board role:
-
-- Main board: raw external `CLOCK` source domain.
-- Function boards: dedicated watchdog divider (`÷M`) from the 2 MHz baseline derived from distributed backplane `CLOCK`.
+The watchdog monitors processor/control-logic execution. A separate clock monitor detects acquisition-clock loss. Optional refresh alignment for noise control must fall back to local clocking when the reference disappears; refreshes must still depend on execution. The independent watchdog timeout does not use the acquisition clock.
 
 ```mermaid
-graph LR
-    subgraph mgmt_domain ["Management Domain (independent local oscillator)"]
-        FSM["Safety FSM / monitor"]
-        TOG["wd_pet_toggle_mgmt\n(continuous toggle)"]
-        FSM --> TOG
-    end
-
-    subgraph timing_domain ["Timing Domain (board-role specific)"]
-        SAMP["CDC sampling FF\n(gated pet generator)"]
-    end
-
-    subgraph wd_domain ["Local Interlock-Power Domain"]
-        LDO["Interlock Regulator"]
-        VSAFE["V_INTERLOCK_LOCAL"]
-        WD["External Watchdog IC"]
-        OD["Open-Drain Driver"]
-        DIODE["Isolation diode"]
-        HOLD["Small hold-up\ncapacitor"]
-        SUP["Voltage supervisor"]
-        SUPOD["Open-drain output"]
-    end
-
-    TIMING_CLK["Timing clock source\nMain: raw external CLOCK\nFunction: 2 MHz ÷M watchdog divider"] --> SAMP
-    TOG --> SAMP
-    SAMP -- "pet_out_pin" --> WD
-    WD -- "timeout" --> OD
-    WD -- "status sense line" --> FSM
-    OD -- "pulls LOW" --> OK["OK Bus"]
-    RAW["Board protected +12V input"] --> LDO --> VSAFE
-    VSAFE --> WD
-    VSAFE --> OD
-    VSAFE -- "sense" --> SUP
-    VSAFE --> DIODE --> HOLD
-    HOLD -- "temporary power" --> SUP
-    HOLD -- "temporary power" --> SUPOD
-    SUP -- "V_INTERLOCK_LOCAL undervoltage" --> SUPOD
-    SUPOD -- "pulls LOW before collapse" --> OK
+flowchart LR
+    CPU["Processor / control logic"] -->|"Execution-dependent refresh"| REF["Local refresh timing
+Optional external-clock alignment"]
+    LOCAL["Local clock"] --> REF
+    EXT["External / distributed CLOCK"] -. "Optional noise alignment" .-> REF
+    REF --> WD["Independent watchdog
+IC or safety CPLD"]
+    EXT --> MON["Independent clock monitor"]
+    LOCAL --> MON
+    WD -->|"Timeout"| OK["Shared OK trip"]
+    MON -->|"Clock loss"| OK
 ```
 
-Key properties:
+The watchdog timeout and trip path use local interlock power and remain independent of the supervised logic. A watchdog inside a safety CPLD does not independently cover failure of that same CPLD. Local interlock-power loss uses the F6 reporting options in ADR-001 R9; a dedicated supervisor or hold-up supply is not mandatory.
 
-- Cascaded pet generation requires both management-domain execution and timing-domain clock activity.
-- If either domain freezes, pet transitions stop and the external watchdog independently times out to pull `OK` LOW.
-- The shown diode/capacitor path is one way to keep the supervisor/output valid briefly during an isolated `V_INTERLOCK_LOCAL` collapse; the ADR requires the behavior, not this topology.
-- Main-board freeze while armed is covered by hardware: the main-board watchdog pulls `OK` LOW, and function-board relay-permissive paths de-energize relays as required by ADR-003 R9. A reset-dominant expression such as `RESET = NOT(EN) OR NOT(OK)` is one possible implementation.
+## Loop implementation options
+
+| Board implementation | Normal continuity | Interlock-power loss (F6) |
+|---|---|---|
+| Passive copper | Direct connection between loop contacts | Separate hardware contribution to `OK` required |
+| Qualified active forwarding | Combinational copy of incoming level | Safe LOW propagates to main, which asserts `OK` |
+
+Both may coexist under the common electrical interface. Empty-slot terminators remain passive. Active forwarding does not depend on `OK`, `EN`, state, or clocks. Its LOW default and recovery on restored power must be verified. Main's own power-loss response cannot depend on failed main-board logic.
+
+An active function board may also remove detector-facing permission directly on incoming LOOP LOW. Downstream boards can act before main asserts `OK`; upstream boards receive the shared trip through `OK`. Local safe-state entry does not force the forwarded output LOW. A detected local safety-hardware problem may independently make the output LOW; forwarding resumes when that condition clears without depending on shared-trip recovery. This provides fault propagation, not automatic fault localization or exhaustive internal failure detection.
 
 ## Continuity loop routing
 

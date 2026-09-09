@@ -1,0 +1,22 @@
+% Generated from the Controlled vocabulary table in README.md. Do not edit.
+\newcommand{\GeneratedGlossaryRows}{%
+\textbf{Main board} & Board that drives shared coordination signals such as EN, CLEAR, CLOCK, and SYNC \\
+\textbf{Function board} & Active plug-in board performing detector-specific work, such as video, bias, or clock generation \\
+\textbf{Bridge board} & Active board extending supported signals to another backplane \\
+\textbf{Passive terminator} & Unpowered slot insert that maintains continuity-loop routing \\
+\textbf{Backplane board} & Physical PCB carrying slots, shared signals, protected +12V, and common utility converters \\
+\textbf{Active board} & Powered main, function, or bridge board participating in communication or safety logic \\
+\textbf{Utility rail} & Mandatory common low-current rail generated on the backplane board \\
+\textbf{Qualified rail-health output} & Open-drain backplane contribution to OK for a shared rail, provided by a verified native converter PGOOD or a dedicated voltage supervisor \\
+\texttt{V\_INTERLOCK\_LOCAL} & Low-power board-local supply for independent interlock hardware; not a backplane-distributed rail \\
+\textbf{PGOOD} & A native power-good output from a power converter; the term is not used for watchdog or fail-safe outputs \\
+\texttt{+12V\_IN} & External system power before the central backplane eFuse \\
+\texttt{+12V} & Protected bulk rail after the central eFuse; distributed to the backplane loads and active boards \\
+\textbf{Fault} & Hardware or electrical condition requiring safe-state action \\
+\textbf{Supervisory interlock event} & Non-hardware condition, such as armed host-supervision timeout, requiring the same safe response \\
+\textbf{Not Ready} & Condition that blocks arming while disarmed but is not itself a fault \\
+\textbf{Trip} & Action that asserts the interlock, normally by pulling OK LOW \\
+\textbf{Recovery} & Explicit ERROR.clear → START.wait → IDLE process \\
+\textbf{Host inventory} & Mapping of logical role to board type/revision, IP, MAC, and serial ID \\
+\textbf{Topology} & Physical signal-distribution structure, such as an LVDS star or multi-backplane clock tree \\
+}

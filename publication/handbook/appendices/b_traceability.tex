@@ -1,0 +1,33 @@
+\chapter{ADR Traceability Index}
+\label{app:traceability}
+
+This index connects the explanatory chapters to the ADRs that control their technical content. It is generated from structured comments in each chapter. It indicates topic coverage, not formal requirement-by-requirement compliance.
+
+\input{handbook/generated/traceability.tex}
+
+\section{Handbook Chapter to ADR}
+
+\begin{longtable}{@{}p{0.58\linewidth}p{0.37\linewidth}@{}}
+\toprule
+\textbf{Handbook chapter} & \textbf{Controlling ADRs} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Handbook chapter} & \textbf{Controlling ADRs} \\
+\midrule
+\endhead
+\GeneratedForwardTraceabilityRows
+\bottomrule
+\end{longtable}
+
+\section{ADR to Handbook Chapter}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{0.16\linewidth}X@{}}
+\toprule
+ADR & Explanatory chapters \\
+\midrule
+\GeneratedReverseTraceabilityRows
+\bottomrule
+\end{tabularx}
+
+The source comments and generated tables are publication metadata. The ADR files remain the unique source for architectural requirements. Chapter-end source notes also identify relevant project-context documents and repository guidance where needed.

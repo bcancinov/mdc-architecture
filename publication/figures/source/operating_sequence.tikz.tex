@@ -1,0 +1,38 @@
+% Figure ID: operating-sequence
+% Reader question: How do host, main, and function boards cooperate during a
+% normal configure-arm-acquire-disarm sequence?
+% Controlling sources: ADR-002, ADR-003, ADR-004, and ADR-006.
+% Status: Derived, non-normative explanation.
+% Required concepts: direct host configuration; main owns EN/SYNC; local arm
+% acceptance; arm guard; direct science data; hardware-first disarm.
+% Avoid implying: exact message names, timer values, one acquisition protocol,
+% or that main proxies function-board network traffic.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[noirlab block,minimum width=35mm] (host) at (0,0) {Remote host};
+  \node[noirlab main board,minimum width=35mm] (main) at (58,0) {Main board};
+  \node[noirlab function board,minimum width=42mm] (function) at (120,0) {Function boards};
+
+  \draw[draw=NOIRLabGrey,dashed] (host.south) -- ++(0,-112);
+  \draw[draw=NOIRLabGrey,dashed] (main.south) -- ++(0,-112);
+  \draw[draw=NOIRLabGrey,dashed] (function.south) -- ++(0,-112);
+
+  \draw[noirlab data flow] (0,-16) -- node[above,font=\scriptsize] {verify identity and configure directly} (120,-16);
+  \draw[noirlab data flow] (0,-29) -- node[above,font=\scriptsize] {arm request} (58,-29);
+  \draw[noirlab safety flow] (58,-41) -- node[above,font=\scriptsize] {\texttt{EN} rises} (120,-41);
+  \node[font=\scriptsize,align=center] at (120,-50) {each board checks local readiness\\and completes \texttt{RUN.init}};
+  \draw[noirlab data flow] (120,-58) -- node[above,font=\scriptsize] {status} (0,-58);
+  \node[font=\scriptsize,align=center] at (58,-65) {arm-to-first-trigger guard};
+  \draw[noirlab timing flow] (58,-73) -- node[above,font=\scriptsize] {acquisition \texttt{SYNC}} (120,-73);
+  \draw[noirlab data flow] (120,-84) -- node[above,font=\scriptsize] {science data and qualifying host interaction} (0,-84);
+  \draw[noirlab data flow] (0,-96) -- node[above,font=\scriptsize] {disarm request} (58,-96);
+  \draw[noirlab safety flow] (58,-107) -- node[above,font=\scriptsize] {\texttt{EN} falls; relay permission removed} (120,-107);
+
+  \node[font=\scriptsize,align=center] at (60,-119) {Residual board cleanup may follow, but hardware de-arm does not wait for it.};
+\end{tikzpicture}
+\end{document}

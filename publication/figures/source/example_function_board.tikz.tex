@@ -1,0 +1,36 @@
+% Explanatory content source: integration/system_concept_guide.md, section 2.
+% Architecture authority: ADR-001 through ADR-006.
+% Example video function board; conceptual zones, not PCB placement or pinout.
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+\begin{document}
+\begin{tikzpicture}[font=\sffamily\small]
+  % Board outline and edge connectors are deliberately schematic.
+  \draw[rounded corners=4mm,very thick,draw=NOIRLabBlue,fill=NOIRLabLightBlue!12] (0,0) rectangle (18,12);
+  \node[anchor=west,font=\sffamily\bfseries] at (0.5,11.5) {Example video function board};
+  \node[noirlab backplane,minimum height=86mm,text width=23mm,align=center] (bp) at (0,6) {Backplane\\connector\\[4mm]\texttt{+12V}\\\texttt{+/-6V}\\\texttt{+/-16V}\\Returns\\[3mm]\texttt{CLOCK}\\\texttt{SYNC}\\\texttt{EN/CLEAR}\\\texttt{OK}\\Loop contacts};
+  \node[noirlab block,text width=35mm] (power) at (4.5,9.7) {Local conversion\\and rail conditioning\\[1mm]\footnotesize Shared analog rails and/or\\local supplies from \texttt{+12V}};
+  \node[noirlab function board,text width=36mm] (cpu) at (10,9.7) {Processing and memory\\FPGA/processor or SoM\\[1mm]\footnotesize Capture, processing, control};
+  \node[noirlab block,text width=25mm] (eth) at (17.7,9.7) {Ethernet connector\\\footnotesize Direct to host};
+  \node[noirlab block,text width=29mm] (timing) at (4.5,6.6) {Timing reception\\Local management /\\safety clocking};
+  \node[noirlab block,text width=29mm] (service) at (10,6.6) {Identity storage\\and service interface};
+  \node[noirlab block,text width=25mm] (uart) at (17.7,6.6) {UART connector\\\footnotesize Local service};
+  \node[noirlab health,text width=35mm] (safety) at (4.5,3.4) {Independent interlock\\\texttt{V\_INTERLOCK\_LOCAL}\\Watchdog IC or safety CPLD\\Fail-safe / power-loss protection};
+  \node[noirlab function board,text width=36mm] (afe) at (10,3.4) {Functional electronics\\Input protection / conditioning\\ADC and local monitoring\\[1mm]\footnotesize Video chain in this example};
+  \node[noirlab block,text width=25mm] (det) at (17.7,3.4) {Detector interface\\connector\\\footnotesize Detector/preamp signals};
+  \draw[noirlab power flow] (bp.east |- power.west)--(power.west);
+  \draw[noirlab power flow] (power)--(cpu);
+  \draw[noirlab power flow] (power.south)--++(0,-0.45)-| (7.4,4.9)-| (afe.north);
+  \draw[noirlab timing flow] (bp.east |- timing.west)--(timing.west);
+  \draw[noirlab timing flow] (timing.north east)--(cpu.south west);
+  \draw[noirlab data flow] (cpu)--(eth);
+  \draw[noirlab data flow] (service)--(uart);
+  \draw[noirlab data flow] (service)--(cpu);
+  \draw[noirlab data flow] (det)--(afe);
+  \draw[noirlab data flow] (afe.east)--++(1.6,0)|-(cpu.east);
+  \draw[noirlab safety flow] (bp.east |- safety.west)--(safety.west);
+  \draw[noirlab safety flow] (safety)--node[above,font=\scriptsize,align=center] {Applicable hardware\\permissives} (afe);
+  \node[font=\scriptsize,align=center,text width=14cm] at (9,1) {Loop contacts use copper or unconditional active forwarding. Interlock power derives from protected \texttt{+12V}.\\Arrows show selected functional paths, not every supply, signal, or protection connection.};
+  \node[font=\scriptsize,align=center,text width=18cm] at (9,-1) {Conceptual arrangement only: no fixed dimensions, placement, connector count, component family, ADC rate, or Ethernet speed.\\Clock and bias boards replace the video chain with their detector-specific electronics.};
+\end{tikzpicture}
+\end{document}

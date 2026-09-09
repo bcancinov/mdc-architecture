@@ -1,0 +1,33 @@
+$pdf_mode = 4;
+$lualatex = 'lualatex -interaction=nonstopmode -halt-on-error -file-line-error %O %S';
+$out_dir = 'build';
+$bibtex_use = 2;
+$max_repeat = 6;
+
+# The reusable style package lives in its own directory. ensure_path uses the
+# platform's own search-path separator, so this is correct on Windows and on
+# Unix alike; a literal ':' would silently break the search path on Windows.
+ensure_path('TEXINPUTS', 'latex/noirlab//');
+
+# Bring figures up to date before the document is built, so that one command
+# does everything. A figure is recompiled only when its source is newer than
+# its PDF, so an ordinary build with no figure edits does no TikZ work at all.
+#
+# This runs in latexmk's own process rather than through TeX, so it needs no
+# -shell-escape and works on restricted setups. It is plain Perl, so it behaves
+# the same on Windows and on Unix. The nested call passes -norc: without it the
+# child would re-read this file from the same directory and recurse endlessly.
+# The child inherits the TEXINPUTS set above, so it finds the style package.
+# Staleness is decided by the nested latexmk itself, from its own dependency
+# database, rather than by a timestamp comparison here. A hand-rolled mtime
+# check disagrees with it: latexmk leaves a PDF untouched when it is already
+# current, which a timestamp test then reads as perpetually out of date.
+sub rebuild_outdated_figures {
+    my @sources = glob('figures/source/*.tikz.tex');
+    return unless @sources;
+    system('latexmk', '-norc', '-lualatex', '-interaction=nonstopmode',
+           '-halt-on-error', '-silent',
+           '-output-directory=figures/generated', @sources) == 0
+        or die "latexmkrc: figure build failed\n";
+}
+rebuild_outdated_figures();

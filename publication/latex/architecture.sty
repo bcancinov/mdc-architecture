@@ -1,0 +1,19 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{latex/architecture}[2026/08/16 Architecture handbook presentation]
+
+\RequirePackage{noirlab-document}
+\RequirePackage{csquotes}
+\RequirePackage[backend=biber,style=authoryear,sorting=nyt,maxbibnames=20]{biblatex}
+
+\newcommand{\ValidateHandbookMetadata}{%
+  \ifNOIRLabRelease
+    \ifdefstring{\NOIRLabReferenceCode}{Pending}
+      {\PackageError{architecture}{Release reference code is pending}{Set it in metadata.tex before a release build.}}{}
+    \ifdefstring{\NOIRLabDocumentOwner}{Pending}
+      {\PackageError{architecture}{Release document owner is pending}{Set it in metadata.tex before a release build.}}{}
+    \ifdefstring{\NOIRLabReleaseDate}{Not released}
+      {\PackageError{architecture}{Release date is missing}{Set it in metadata.tex before a release build.}}{}
+  \fi
+}
+
+\AtBeginDocument{\ValidateHandbookMetadata}

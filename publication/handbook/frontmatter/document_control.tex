@@ -1,0 +1,36 @@
+\chapter*{Document Control}
+\addcontentsline{toc}{chapter}{Document Control}
+
+\section*{Publication status}
+
+\begin{tabularx}{\linewidth}{@{}>{\bfseries}p{0.30\linewidth}X@{}}
+  Document title & \NOIRLabDocumentTitle \\
+  Document type & \NOIRLabDocumentType \\
+  Reference code & \NOIRLabReferenceCode \\
+  Version & \NOIRLabVersion \\
+  Generation date & \NOIRLabGenerationDate \\
+  Distribution & \NOIRLabDistribution \\
+\end{tabularx}
+
+\section*{Approvals}
+
+\ifdefempty{\NOIRLabReviewers}{}{\textbf{Reviewers:} \NOIRLabReviewers\par\medskip}
+
+\NOIRLabApprovalRecord
+
+Approval names and dates are entered only through the formal document-control process and are never inferred from repository history.
+
+\section*{Change record}
+
+\begin{tabularx}{\linewidth}{@{}l l X@{}}
+  \toprule
+  \textbf{Version} & \textbf{Date} & \textbf{Description} \\
+  \midrule
+  0.1 & Not recorded & Initial architecture handbook with generated reference appendices. \\
+  \NOIRLabVersion & \NOIRLabRevisionDate & \NOIRLabChangeSummary \\
+  \bottomrule
+\end{tabularx}
+
+% A closing paragraph break keeps this file self-contained, so the following
+% source does not continue the paragraph left open by the table above.
+

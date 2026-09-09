@@ -1,0 +1,4 @@
+[submodule "publication/latex/noirlab"]
+	path = publication/latex/noirlab
+	url = https://github.com/bcancinov/noirlab-latex-style.git
+	ignore = untracked

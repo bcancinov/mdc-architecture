@@ -1,0 +1,53 @@
+% Figure ID: system-overview
+% Reader question: What are the main system elements, and how are they connected?
+% Controlling sources: ADR-001 through ADR-006 and integration/system_concept_guide.md
+% Status: Derived, non-normative explanation.
+% Required concepts: direct host access to active boards; main, function, bridge,
+% backplane, detector, power, timing, safety, and optional extension.
+% Avoid implying: science data passes through main; one function board type is fixed;
+% physical expansion guarantees electrical or performance capacity.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=9mm and 10mm]
+  \node[noirlab main board] (main) {Main board};
+  \node[noirlab function board,right=of main] (video) {Video function\\board};
+  \node[noirlab function board,right=of video] (clockbias) {Clock, bias, or other\\function board};
+  \node[noirlab function board,right=of clockbias] (bridge) {Bridge board\\\footnotesize optional extension};
+
+  \node[noirlab block,above=19mm of $(main.north)!0.5!(bridge.north)$,minimum width=145mm] (network) {Instrument Ethernet network};
+  \node[noirlab block,above=of network,minimum width=34mm] (host) {Remote host};
+
+  \node[noirlab block,below=15mm of $(video.south)!0.5!(clockbias.south)$,minimum width=68mm] (detector) {Detector and instrument electronics};
+  \node[noirlab backplane,below=14mm of detector,minimum width=150mm] (backplane) {Backplane board};
+  \node[font=\sffamily\scriptsize,below=2mm of backplane]
+    {protected power \textbullet{} common utilities \textbullet{} shared safety \textbullet{} timing and connector routing};
+
+  \node[noirlab block,left=11mm of backplane] (power) {External\\power};
+  \node[noirlab block,left=11mm of main] (reference) {External timing\\reference, if used};
+  \node[noirlab block,right=18mm of bridge] (extension) {Additional\\backplane};
+
+  \draw[noirlab data flow,<->] (host) -- node[right,font=\scriptsize] {control, telemetry, and science data} (network);
+  \coordinate (netfan) at ([yshift=8mm]$(main.north)!0.5!(bridge.north)$);
+  \draw[noirlab data flow,<->] (network.south) -- (netfan);
+  \draw[draw=NOIRLabGrey,thick] (main.north |- netfan) -- (bridge.north |- netfan);
+  \draw[noirlab data flow] (main.north |- netfan) -- (main.north);
+  \draw[noirlab data flow] (video.north |- netfan) -- (video.north);
+  \draw[noirlab data flow] (clockbias.north |- netfan) -- (clockbias.north);
+  \draw[noirlab data flow] (bridge.north |- netfan) -- (bridge.north);
+
+  \draw[noirlab power flow] (power) -- (backplane);
+  \draw[noirlab timing flow] (reference) -- (main);
+  \draw[noirlab data flow,<->] (main.south) -- ([xshift=-58mm]backplane.north);
+  \draw[noirlab data flow,<->] (video.south) -- ++(0,-5mm) -| ([xshift=-35mm]backplane.north);
+  \draw[noirlab data flow,<->] (clockbias.south) -- ++(0,-5mm) -| ([xshift=35mm]backplane.north);
+  \draw[noirlab data flow,<->] (bridge.south) -- ([xshift=58mm]backplane.north);
+
+  \draw[noirlab data flow,<->] (video.south) -- (video.south |- detector.north);
+  \draw[noirlab data flow,<->] (clockbias.south) -- (clockbias.south |- detector.north);
+  \draw[noirlab data flow,<->] (bridge) -- node[above,font=\scriptsize,fill=white,inner sep=1pt] {supported interfaces} (extension);
+\end{tikzpicture}
+\end{document}

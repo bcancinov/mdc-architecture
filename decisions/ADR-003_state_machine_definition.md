@@ -1,7 +1,7 @@
 # ADR-003: Hierarchical State Machine Definition
 
 **Status:** Resolved
-**Last updated:** 2026-08-16
+**Last updated:** 2026-09-07
 
 ---
 
@@ -38,8 +38,8 @@ The system follows one principle:
 
 Three layers cooperate:
 
-1. **Hardware interlock:** `OK`, `EN`, normally-open relays, and board-local fail-safe hardware remove hazardous drive without depending on host software or continued FPGA state progression.
-2. **Safety FSM:** FPGA logic implements the common state behavior, readiness gates, fault retention, and recovery coordination from an independent local management clock.
+1. **Hardware interlock:** `OK`, `EN`, normally-open relays, and board-local fail-safe hardware remove hazardous drive without depending on host software or continued FPGA/CPLD state progression.
+2. **Safety FSM:** FPGA logic or a dedicated safety CPLD implements the common state behavior, readiness gates, fault retention, and recovery coordination from an independent local management or safety clock.
 3. **Host management:** Ethernet supplies commands, configuration, diagnostics, and armed supervision but cannot override an asserted hardware interlock.
 
 The management clock shall remain independent of distributed `CLOCK`. Timing-critical sequencer actions use the 100 MHz timing domain; management observes those actions through safe clock-domain crossings. Implementations shall make safety outputs and asynchronous inputs resistant to metastability and glitches, but exact synchronizer, register, and debounce structures are design-specification scope.
@@ -49,11 +49,11 @@ The management clock shall remain independent of distributed `CLOCK`. Timing-cri
 | Signal | Driver and topology | Architectural behavior |
 |---|---|---|
 | `OK` | Open-drain contributions from boards and qualified backplane rail-health sources; pull-up on main | HIGH means no participant is asserting a fault. Any participant may pull LOW. A LOW trip has priority over commanded operation. |
-| `LOOP_OUT` / `LOOP_IN` | Passive series continuity path originating and terminating at main | A broken return path causes main to assert its `OK` fault contribution. |
+| `LOOP_OUT` / `LOOP_IN` | Series continuity path originating and terminating at main; passive copper or unconditional active forwarding | A broken return path causes main to assert its `OK` fault contribution. |
 | `EN` | Main; shared level | HIGH only while the system is armed in `RUN`. LOW means safe/disarmed. Function boards independently qualify a rising edge; falling removes hardware permission without waiting for an FSM transition. |
 | `CLEAR` | Main; shared level/pulse | Requests locally faulted boards to clear retained evidence as appropriate and re-evaluate live conditions. It does not force a board to declare itself healthy. |
 | `CLOCK` | Main clock source; point-to-point LVDS | Continuous 100 MHz sequencer clock. Function boards use it directly for timing-critical work and independently detect its loss. |
-| `SYNC` | Main; point-to-point LVDS | Rising and falling acquisition events are captured in the 100 MHz domain. A separate CDC-safe observation is used for management. Optional pre-arm converter synchronization is defined by ADR-004/ADR-005. |
+| `SYNC` | Main; point-to-point LVDS | With `EN=1`, rising and falling acquisition events are captured in the 100 MHz domain. With `EN=0`, a pulse is a converter-alignment event that compatible function boards recognize in any local state. A separate CDC-safe observation is used for management. Detailed behavior is defined by ADR-004. |
 
 Undriven `EN` and `CLEAR` shall assume their safe LOW levels. Electrical bias, termination, pinout, pulse width, and timing margins belong to the applicable ICD.
 
@@ -77,7 +77,7 @@ The state families have the following meanings:
 | State | Meaning |
 |---|---|
 | `START.boot` | Initialize board identity, communications, safe defaults, and local monitoring. The system remains unarmed. |
-| `START.wait` | Qualify required timing activity and stable shared health before permitting `IDLE`. Used after boot and after recovery. |
+| `START.wait` | Following main's `START`-entry converter-alignment event, boards qualify required timing activity, any required converter settling, and stable shared health before permitting `IDLE`. Used after boot and after recovery. |
 | `IDLE` | Safe and configurable. Relays are open and `EN=0`. |
 | `RUN.init` | Arm-entry preparation after `EN` rises. |
 | `RUN.wait` | Armed and ready for an acquisition `SYNC` event. |
@@ -114,12 +114,16 @@ The architecture requires the following bounded behaviors, but their values are 
 | Clear-attempt timeout | Bound local recovery work |
 | Arm-to-first-trigger guard | Give the slowest supported board time to finish `RUN.init` |
 | Host-supervision timeout | Bound loss of qualifying host interaction while armed |
-| Watchdog timeout and test-release time | Verify external watchdog response |
+| Watchdog timeout and test-release time | Verify independent hardware watchdog response |
 | Optional converter settling time | Prevent arming before an intentionally phase-controlled converter is ready |
 
 Timeout boundaries, debounce counts, counter implementation, and diagnostic-bit allocation belong to the firmware and ICD specifications.
 
 ### R7: Arming, acquisition, and disarming
+
+Whenever main enters `START`, it sends one converter-alignment `SYNC` pulse while `EN=0`. A compatible function board recognizes any such pulse regardless of whether its local state is `START`, `IDLE`, or `ERROR`; this accommodates small differences in state-transition timing across the fleet. The pulse aligns only the applicable local converter timing and does not clear faults or change safety state. A board that requires the event shall not declare itself ready until alignment and settling have completed.
+
+Before arming, the host shall verify that board configuration and readiness match the intended operation. This applies equally to retained settings and sequences from an earlier host connection; changing hosts does not itself require reloading valid configuration. Verification details belong to the applicable ICD.
 
 The host commands `arm` to the main board. Main checks its local requirements and asserts `EN` only from `IDLE`. Each function board then independently accepts the `EN` rising edge only if its applicable safety and readiness conditions are valid. A board that detects an unsafe arm attempt trips through `OK`; no separate backplane readiness bus is required.
 
@@ -131,19 +135,25 @@ Operational writes and sequencer loading are permitted only while safely disarme
 
 ### R8: Armed host supervision and maintenance tests
 
-Every armed active board shall require an ICD-defined qualifying host interaction within a bounded interval. The interaction must demonstrate communication in both directions; unsolicited outbound traffic alone is insufficient. Timeout is a supervisory interlock event that uses the normal local trip path.
+Continued armed operation with an unavailable or unresponsive host is not assumed safe. A board need not distinguish a frozen host from a failed communication path before taking the protective response.
 
-The system shall also support safe maintenance verification of board `OK` and watchdog paths. Tests are performed only while disarmed or already latched safe. Exact commands, sequencing, cadence, and acceptance timing belong to the system ICD and maintenance plan.
+Every armed active board, including main and function boards, shall require an ICD-defined qualifying host interaction within a bounded interval. The interaction must demonstrate communication in both directions; unsolicited outbound traffic alone is insufficient. A bidirectional telemetry exchange may qualify; a separate heartbeat message is not required. Timeout is a supervisory interlock event that uses the normal local trip path to assert `OK` LOW. This requirement applies only while armed (`EN=1`). Host disconnection alone while disarmed (`EN=0`) shall not assert `OK`; hardware protection remains active. Communication activity does not prove correct operation of every part of the host application.
+
+The system shall also support safe maintenance verification of board `OK` and watchdog paths. Tests are performed while safely disarmed and shall meet the conclusive assertion requirements of ADR-001 R7. Exact commands, sequencing, cadence, and acceptance timing belong to the system ICD and maintenance plan.
 
 ### R9: Function-board relay permissive
 
-A function-board detector-facing relay may energize only when all required hardware permissives are true:
+A function-board detector protection relay may energize only when all required hardware permissives are true:
 
 ```text
 relay_energized = local_arm_request AND EN AND OK
 ```
 
-Loss of `EN`, loss of `OK`, or loss of local interlock power shall remove relay drive independently of processor software, FPGA state progression, and distributed `CLOCK`. Relays shall be normally open so complete board-power loss is safe. Energization shall be deliberate and glitch-resistant; de-energization shall not require completion of an FSM transition.
+The expression states the common permissives; a board may add incoming-loop validity as a further hardware permissive when using active forwarding. Incoming `LOOP_IN` LOW then removes local detector-facing permission without waiting for main or a state-machine transition. Main still asserts `OK` from the complete return so every powered board enters the shared safe response. This local response shall not feed back into loop forwarding through `OK`, `EN`, or operating state (ADR-001 R3).
+
+Loss of `EN`, loss of `OK`, or loss of local interlock power shall remove relay drive independently of processor software, FPGA/CPLD state progression, and distributed `CLOCK`. Relays shall be normally open so complete board-power loss is safe. Energization shall be deliberate and glitch-resistant; de-energization shall not require completion of an FSM transition.
+
+The relay-permissive signal shall become inactive on interlock-supply loss even if relay-driver power remains available from another rail. ADR-001 R9 also requires F6 reporting to the powered fleet; a dedicated supply supervisor is not mandatory.
 
 A reset-dominant latch or flip-flop is one compliant implementation, not an architectural requirement. Circuit topology, polarity, relay driver, and component selection belong to the board hardware design specification.
 

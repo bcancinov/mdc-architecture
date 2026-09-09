@@ -1,0 +1,35 @@
+% Figure ID: state-families
+% Reader question: What are the common externally visible operating states and
+% how does the system move between them?
+% Controlling source: ADR-003.
+% Status: Derived, non-normative explanation.
+% Required concepts: START, IDLE, RUN, ERROR; expanded RUN and ERROR families;
+% safe fault priority; explicit recovery through START qualification.
+% Avoid implying: exact HDL encoding, timer values, register names, or identical
+% internal substates on every board.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=18mm and 22mm]
+  \node[noirlab block,text width=31mm,minimum height=19mm] (start) {\textbf{START}\\\texttt{boot} $\rightarrow$ \texttt{wait}\\safe initialization and qualification};
+  \node[noirlab block,right=of start,text width=27mm,minimum height=19mm] (idle) {\textbf{IDLE}\\safe, disarmed, and configurable};
+  \node[noirlab main board,right=of idle,text width=46mm,minimum height=27mm] (run) {\textbf{RUN}\\\texttt{init} $\rightarrow$ \texttt{wait}\\\texttt{wait} $\rightarrow$ \texttt{run} $\rightarrow$ \texttt{stop} $\rightarrow$ \texttt{wait}};
+  \node[noirlab block,below=of idle,draw=NOIRLabAlertRed,text width=38mm,minimum height=22mm] (error) {\textbf{ERROR}\\\texttt{run}: latched safe hold\\\texttt{clear}: recheck live conditions};
+  \node[left=12mm of start,font=\small] (power) {Power-up};
+
+  \draw[noirlab data flow] (power) -- (start);
+  \draw[noirlab data flow] (start) -- node[above,font=\scriptsize] {qualification succeeds} (idle);
+  \draw[noirlab timing flow] (idle) -- node[above,font=\scriptsize] {arm accepted} (run);
+  \draw[noirlab data flow,bend left=25] (run) to node[below,font=\scriptsize] {disarm} (idle);
+
+  \draw[noirlab safety flow] (start.south) -- (error.west);
+  \draw[noirlab safety flow] (idle) -- node[right,font=\scriptsize] {fault} (error);
+  \draw[noirlab safety flow] (run.south) -- (error.east);
+  \draw[noirlab data flow] (error.south) -- ++(0,-10mm) -| node[pos=0.62,below,font=\scriptsize,align=center,fill=white,inner sep=1pt] {explicit clear succeeds; return through qualification} (start.west);
+
+  \node[font=\scriptsize,align=center,below=23mm of error] {A remaining fault returns \texttt{ERROR.clear} to \texttt{ERROR.run}.\\Restoring a condition never returns directly to operation.};
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,9 @@
+% Generated from ADR-003 R3. Do not edit.
+\newcommand{\GeneratedSharedSignalRows}{%
+\texttt{OK} & Open-drain contributions from boards and qualified backplane rail-health sources; pull-up on main & HIGH means no participant is asserting a fault. Any participant may pull LOW. A LOW trip has priority over commanded operation. \\
+\texttt{LOOP\_OUT / LOOP\_IN} & Series continuity path originating and terminating at main; passive copper or unconditional active forwarding & A broken return path causes main to assert its OK fault contribution. \\
+\texttt{EN} & Main; shared level & HIGH only while the system is armed in RUN. LOW means safe/disarmed. Function boards independently qualify a rising edge; falling removes hardware permission without waiting for an FSM transition. \\
+\texttt{CLEAR} & Main; shared level/pulse & Requests locally faulted boards to clear retained evidence as appropriate and re-evaluate live conditions. It does not force a board to declare itself healthy. \\
+\texttt{CLOCK} & Main clock source; point-to-point LVDS & Continuous 100 MHz sequencer clock. Function boards use it directly for timing-critical work and independently detect its loss. \\
+\texttt{SYNC} & Main; point-to-point LVDS & With EN=1, rising and falling acquisition events are captured in the 100 MHz domain. With EN=0, a pulse is a converter-alignment event that compatible function boards recognize in any local state. A separate CDC-safe observation is used for management. Detailed behavior is defined by ADR-004. \\
+}

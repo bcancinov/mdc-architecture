@@ -1,0 +1,70 @@
+% Figure ID: power-tree
+% Reader question: How does external power become shared and board-local power,
+% and how are protection, fast trips, and diagnostics kept distinct?
+% Controlling sources: ADR-005 and ADR-001.
+% Status: Derived, non-normative explanation.
+% Required concepts: +12V_IN/eFuse/+12V boundary; backplane utility conversion;
+% local high-current conversion; V_INTERLOCK_LOCAL; direct shared-rail trip;
+% main-board diagnostic measurement.
+% Avoid implying: exact thresholds or components; mandatory local eFuses;
+% telemetry is the protection path; OK remains powered after total cutoff.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=8mm and 10mm]
+  % Main power tree. The three destinations are deliberately separated by row.
+  \node[noirlab block] (input) {External\\\texttt{+12V\_IN}};
+  \node[noirlab block,right=of input,draw=NOIRLabAlertRed] (efuse) {Central backplane\\eFuse};
+  \node[noirlab backplane,right=of efuse,minimum width=30mm] (bulk) {Protected\\\texttt{+12V}};
+
+  \node[noirlab block,above right=13mm and 14mm of bulk] (utility) {Backplane utility\\converters};
+  \node[noirlab block,right=of utility,minimum width=39mm] (rails) {Fixed-pin, always available rails\\\texttt{+/-6V\_ANA}, \texttt{+/-16V\_ANA}};
+  \node[noirlab function board,right=of rails] (analog) {Optional board consumption\\Conditioning and analog loads};
+
+  \node[noirlab function board,right=14mm of bulk] (localconvert) {Board-local conversion\\and protection};
+  \node[noirlab block,right=of localconvert,minimum width=43mm] (digital) {Analog or digital loads\\e.g., high-current ADC supply};
+
+  \node[noirlab function board,below right=13mm and 14mm of bulk] (interlock) {Board-local\\\texttt{V\_INTERLOCK\_LOCAL}};
+  \node[noirlab block,right=of interlock,minimum width=43mm] (protection) {Watchdog IC or safety CPLD,\\fail-safe path and relay permissive};
+
+  \draw[noirlab power flow] (input) -- (efuse);
+  \draw[noirlab power flow] (efuse) -- (bulk);
+  \draw[noirlab power flow] (bulk) |- (utility);
+  \draw[noirlab power flow] (utility) -- (rails);
+  \draw[noirlab power flow] (rails) -- (analog);
+  \draw[noirlab power flow] (bulk) -- (localconvert);
+  \draw[noirlab power flow] (localconvert) -- (digital);
+  \draw[noirlab power flow] (bulk) |- (interlock);
+  \draw[noirlab power flow] (interlock) -- (protection);
+
+  % Fast protection is shown as its own band. These are independent contributors,
+  % not a serial chain and not a telemetry path.
+  \node[noirlab health,below=25mm of efuse] (hbulk) {Protected-output\\health};
+  \node[noirlab health,right=8mm of hbulk] (hrail) {Common-rail\\health};
+  \node[noirlab health,right=8mm of hrail] (hlocal) {Local interlock-supply\\health};
+  \node[noirlab block,below=10mm of hrail,draw=black,very thick,minimum width=38mm] (ok) {Shared \texttt{OK}\\hardware trip bus};
+  \draw[noirlab safety flow] (hbulk.south) -- (ok.north west);
+  \draw[noirlab safety flow] (hrail.south) -- (ok.north);
+  \draw[noirlab safety flow] (hlocal.south) -- (ok.north east);
+  \begin{scope}[on background layer]
+    \node[noirlab band,fit=(hbulk)(hrail)(hlocal)(ok),label={[font=\sffamily\footnotesize,anchor=south west]north west:Direct hardware-trip supervision}] {};
+  \end{scope}
+
+  % Diagnostic observation is intentionally separate from the hardware trip.
+  \node[noirlab block,below=18mm of ok,minimum width=42mm] (observed) {Protected \texttt{+12V} and\\common utility rails};
+  \node[noirlab main board,right=of observed,minimum width=40mm] (measurement) {Main-board voltage\\measurement};
+  \node[noirlab block,right=of measurement] (diagnostics) {Host diagnostics};
+  \draw[noirlab data flow] (observed) -- (measurement);
+  \draw[noirlab data flow] (measurement) -- (diagnostics);
+  \begin{scope}[on background layer]
+    \node[noirlab band,fit=(observed)(measurement)(diagnostics),label={[font=\sffamily\footnotesize,anchor=south west]north west:Diagnostic observation}] {};
+  \end{scope}
+
+  \node[font=\sffamily\scriptsize,align=left,anchor=north west]
+    at ([yshift=-7mm]observed.south west)
+    {Solid red: power flow\qquad Dashed black: direct hardware trip\qquad Grey: diagnostic path};
+\end{tikzpicture}
+\end{document}

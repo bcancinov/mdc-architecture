@@ -1,0 +1,42 @@
+% Figure ID: shared-rail-noise
+% Reader question: How does the architecture limit noise entering and leaving
+% a function board that consumes a common analog rail?
+% Controlling source: ADR-005.
+% Status: Derived, non-normative explanation.
+% Required concepts: coherent continuous converter switching; common rail;
+% bidirectional board-entry conditioning; local analog loads; declared limits.
+% Avoid implying: synchronization eliminates noise; one filter topology is
+% mandatory; the drawing specifies component values or physical layout.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=10mm and 13mm]
+  \node[noirlab main board] (main) {Main-board utility\\synchronization};
+  \node[noirlab block,right=24mm of main] (converter) {Backplane utility\\converter};
+  \node[noirlab backplane,right=of converter,minimum width=34mm] (rail) {Shared analog\\utility rail};
+
+  \node[noirlab block,above right=15mm and 15mm of rail] (filtera) {Board-entry\\conditioning};
+  \node[noirlab function board,right=22mm of filtera] (loada) {Function board A\\analog circuits};
+  \node[noirlab block,below right=15mm and 15mm of rail] (filterb) {Board-entry\\conditioning};
+  \node[noirlab function board,right=22mm of filterb] (loadb) {Function board B\\analog circuits};
+
+  \draw[noirlab timing flow] (main) -- node[above,font=\scriptsize,fill=white,inner sep=1pt] {fixed-frequency sync} (converter);
+  \draw[noirlab power flow] (converter) -- (rail);
+  \draw[noirlab power flow] (rail) |- (filtera);
+  \draw[noirlab power flow] (filtera) -- (loada);
+  \draw[noirlab power flow] (rail) |- (filterb);
+  \draw[noirlab power flow] (filterb) -- (loadb);
+
+  \draw[noirlab data flow,<-] ([yshift=2mm]filtera.east) -- node[above,font=\scriptsize,fill=white,inner sep=1pt] {load disturbance} ([yshift=2mm]loada.west);
+  \draw[noirlab data flow,<-] ([yshift=-2mm]rail.east) -- ([yshift=-2mm]filtera.west);
+  \node[font=\scriptsize,align=center,fill=white,inner sep=1pt] at ($(rail.east)!0.52!(filtera.west)+(0,5mm)$) {limited returned\\disturbance};
+  \draw[noirlab data flow,<-] ([yshift=-2mm]filterb.east) -- node[below,font=\scriptsize,fill=white,inner sep=1pt] {load disturbance} ([yshift=-2mm]loadb.west);
+  \draw[noirlab data flow,<-] ([yshift=2mm]rail.east) -- ([yshift=2mm]filterb.west);
+  \node[font=\scriptsize,align=center,fill=white,inner sep=1pt] at ($(rail.east)!0.52!(filterb.west)+(0,-5mm)$) {limited returned\\disturbance};
+
+  \node[font=\scriptsize,align=center,below=24mm of rail] {Conditioning must work in both directions:\\reject incoming rail disturbance and limit disturbance returned by each board.};
+\end{tikzpicture}
+\end{document}

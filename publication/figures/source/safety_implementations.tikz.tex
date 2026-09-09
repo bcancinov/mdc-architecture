@@ -1,0 +1,24 @@
+% Controlling sources: ADR-001 R2/R5/R9, ADR-003 R9.
+% Derived implementation examples; not a circuit or universal component partition.
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+\begin{document}
+\begin{tikzpicture}[node distance=8mm and 12mm]
+\foreach \y/\title/\watchdogLabel/\logic in {0/{A: Separate watchdog device}/{Watchdog IC}/{Separate safety logic},-7.0/{B: Combined safety functions}/{Safety CPLD}/{Watchdog + safety logic}} {
+  \begin{scope}[yshift=\y cm]
+    \node[font=\sffamily\bfseries,anchor=west] at (-2,1.8) {\title};
+    \node[noirlab block,text width=34mm] (brain) at (0,0) {Supervised processor\\or FPGA control logic};
+    \node[noirlab health,text width=34mm] (watch) at (6,0) {\watchdogLabel\\\logic\\Independent timeout time base};
+    \node[noirlab block,text width=34mm] (ok) at (12,0) {Open-drain contribution\\Shared \texttt{OK}};
+    \node[noirlab block,text width=34mm] (power) at (0,-2.4) {\texttt{V\_INTERLOCK\_LOCAL}};
+    \node[noirlab health,text width=34mm] (sup) at (6,-2.4) {Hardware power-loss\\reporting (F6)};
+    \draw[noirlab data flow] (brain) -- node[midway,above=3mm,font=\scriptsize,align=center,text width=20mm] {Progress\\evidence} (watch);
+    \draw[noirlab safety flow] (watch) -- node[midway,above=3mm,font=\scriptsize,align=center,text width=20mm] {Timeout /\\local trip} (ok);
+    \draw[noirlab power flow] (power) -- (sup);
+    \draw[noirlab power flow] (power.north) -- ++(0,0.7) -| (watch.south);
+    \draw[noirlab safety flow] (sup.east) -| node[pos=0.25,below=3mm,font=\scriptsize,align=center,text width=32mm] {Trip remains valid\\during supply loss} (ok.south);
+  \end{scope}
+}
+\node[font=\sffamily\small,align=center,text width=15cm] at (6,-11) {Direct F6 reporting shown; qualified active forwarding through main is also permitted.\\Both examples require fail-safe power/reset behavior and relay de-energization without continued logic progression.\\A CPLD watchdog does not independently cover failure of that same CPLD; board design must address it.};
+\end{tikzpicture}
+\end{document}

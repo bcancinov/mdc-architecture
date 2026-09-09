@@ -1,7 +1,7 @@
 # ADR-006: Acquisition Data Path
 
 **Status:** Resolved
-**Last updated:** 2026-08-16
+**Last updated:** 2026-09-07
 
 ---
 
@@ -34,14 +34,15 @@ A second physical interface (additional Ethernet port, fiber, etc.) reserved for
 
 ## Decision
 
-Acquisition data flows from each video function board directly to the remote host over that board's own Ethernet endpoint. There is no backplane data path, and the main board never carries science data. Link capacity and physical-interface details are defined by the board and system ICDs.
+Acquisition data flows from each video function board directly to the remote host over that board's own Ethernet endpoint. There is no backplane data path, and the main board never carries science data. Link capacity and physical-interface details are defined by the board and system ICDs. Ethernet speed is application-dependent for every function board; no universal 100 Mb/s or 1 Gb/s rate is mandated.
 
 ### Constraints (normative)
 
 1. **Host supervision during acquisition:** The ICD shall define which valid host interaction refreshes the board's supervision timer during acquisition. It may be a telemetry request, explicit heartbeat, or an application-level data acknowledgement/credit. The board shall return an ICD-defined response so the host can verify the reverse path. Outbound image or telemetry traffic alone does not prove that the host is present. The implementation must be verified at maximum supported data load so qualifying host interactions are not indefinitely delayed by local scheduling or queueing.
 2. **Overrun is a data-quality event, not by itself a fault:** If the host or network cannot absorb readout data fast enough (buffer overrun, dropped frames, incomplete transfer), the board does not pull `OK` LOW solely because of that overrun and reports enough telemetry for the host to identify the affected data. If no qualifying host interaction is completed within the ICD-defined host-supervision interval, however, the independent S1 timeout still trips the system. The transport's behavior after an overrun is ICD-defined and must preserve detector safety.
 3. **Buffering is sized against the overrun policy:** Board-local buffering (depth, memory technology, full-frame vs. streaming) is an ICD/design decision, but it must be explicitly sized and verified against constraint 2 and the instrument's throughput requirements.
-4. **Transport is ICD scope:** Protocol, framing, flow control, retransmission, and data-integrity checking (e.g., checksums per frame) are ICD-defined.
+4. **Application capacity:** Each board/application ICD shall define supported data products and rates, any processing or reduction, and the Ethernet capacity needed for control, supervision, telemetry, and acquisition. Capacity shall be verified at maximum supported data load while preserving the supervision behavior in constraint 1.
+5. **Transport is ICD scope:** Protocol, framing, flow control, retransmission, and data-integrity checking (e.g., checksums per frame) are ICD-defined.
 
 ---
 

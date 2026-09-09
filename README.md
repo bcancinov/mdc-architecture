@@ -16,7 +16,8 @@ specifications/
 │   └── reference/             Non-normative examples, tables, and supporting diagrams
 ├── interfaces/                Interface Control Documents (planned)
 ├── design/                    Firmware and hardware design specifications (planned)
-└── integration/               Concept guides and integration material
+├── integration/               Concept guides and integration material
+└── publication/               Derived handbook planning and publication tooling
 ```
 
 | Document type | Purpose | Typical content |

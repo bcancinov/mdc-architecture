@@ -1,0 +1,27 @@
+% Controlling sources: ADR-004, ADR-001, ADR-003, ADR-005.
+% Derived domain relationships; ADC rates and exact clock implementation are ICD-defined.
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+\begin{document}
+\begin{tikzpicture}[node distance=12mm and 15mm]
+\node[noirlab main board] (main) at (0,0) {Main timing source\\100 MHz \texttt{CLOCK}, \texttt{SYNC}};
+\node[noirlab function board] (seq) at (6,0) {Function-board sequencer\\Common acquisition events};
+\node[noirlab function board] (adc) at (6,-2.4) {ADC sampling and processing\\Application-specific rate};
+\node[noirlab block] (adctime) at (0,-2.4) {ADC sampling time base\\Selected by application};
+\draw[noirlab timing flow] (main)--node[above,font=\scriptsize] {Point-to-point LVDS} (seq);
+\draw[noirlab timing flow] (adctime)--(adc);
+\draw[noirlab data flow,<->] (seq)--node[right,font=\scriptsize,align=left] {Sample/event association\\and crossings: ICD-defined} (adc);
+\node[font=\scriptsize,align=center,text width=12cm] at (3,-3.6) {The ADC time base may be related to sequencer timing; this example imposes neither independence nor a fixed frequency ratio.};
+\node[noirlab block] (osc) at (0,-5) {Independent local\\management clock};
+\node[noirlab function board] (mgmt) at (6,-5) {Management services\\Ethernet/UART and diagnostics};
+\draw[noirlab data flow] (osc)--(mgmt);
+\node[noirlab block] (safeclk) at (0,-7.2) {Local safety clocking\\May share management clock};
+\node[noirlab health] (safe) at (6,-7.2) {Safety FSM and monitoring\\FPGA or dedicated CPLD};
+\draw[noirlab data flow] (safeclk)--(safe);
+\node[font=\scriptsize,align=center,text width=12cm] at (3,-8.5) {Management and safety do not depend on distributed \texttt{CLOCK}.\\The watchdog timeout time base must survive loss of its supervised clocks.};
+\node[noirlab main board] (util) at (0,-10) {Five main-board utility\\synchronization outputs};
+\node[noirlab backplane] (conv) at (6,-10) {Backplane utility converters\\Defined free-running fallback};
+\draw[noirlab timing flow] (util)--node[above,font=\scriptsize] {\texttt{2 MHz / N}} (conv);
+\node[font=\scriptsize,align=center,text width=12cm] at (3,-11.4) {Optional board-local converter clocks may derive from \texttt{CLOCK};\\an \texttt{EN=0} alignment \texttt{SYNC} affects only compatible local dividers.};
+\end{tikzpicture}
+\end{document}

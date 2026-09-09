@@ -1,0 +1,36 @@
+% Figure ID: modular-cards
+% Reader question: What does the modular controller look like conceptually?
+% Controlling sources: ADR-002, ADR-003, ADR-004, and ADR-005.
+% Status: Derived, non-normative explanation.
+% Required concepts: one main board and specialized function boards plug into a
+% common backplane; specialization belongs on function boards.
+% Avoid implying: a required slot count, exact mechanics, connector geometry,
+% board dimensions, or a fixed set of function-board types.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}
+  \node[noirlab card,draw=NOIRLabBlue,very thick,fill=NOIRLabLightBlue!45] (main) at (0,0) {Main board\\[2mm]\footnotesize shared coordination};
+  \node[noirlab card] (video) at (4.0,0) {Function board\\[2mm]\footnotesize video};
+  \node[noirlab card] (clock) at (8.0,0) {Function board\\[2mm]\footnotesize clocks and bias};
+  \node[noirlab card,dashed] (other) at (12.0,0) {Additional\\function board\\[2mm]\footnotesize as needed};
+
+  \node[noirlab contact] at ([yshift=-1.5mm]main.south) {};
+  \node[noirlab contact] at ([yshift=-1.5mm]video.south) {};
+  \node[noirlab contact] at ([yshift=-1.5mm]clock.south) {};
+  \node[noirlab contact,dashed] at ([yshift=-1.5mm]other.south) {};
+
+  \coordinate (cardscenter) at ($(main.south)!0.5!(other.south)$);
+  \node[noirlab backplane,minimum width=155mm,minimum height=14mm,anchor=north] (backplane)
+    at ([yshift=-4mm]cardscenter)
+    {Backplane board\\\footnotesize common power, safety, timing, and interconnection};
+
+  \draw[NOIRLabGrey,thick] (main.south) -- (main.south |- backplane.north);
+  \draw[NOIRLabGrey,thick] (video.south) -- (video.south |- backplane.north);
+  \draw[NOIRLabGrey,thick] (clock.south) -- (clock.south |- backplane.north);
+  \draw[NOIRLabGrey,thick,dashed] (other.south) -- (other.south |- backplane.north);
+\end{tikzpicture}
+\end{document}

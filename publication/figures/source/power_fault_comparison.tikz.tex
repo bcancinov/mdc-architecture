@@ -1,0 +1,40 @@
+% Figure ID: power-fault-comparison
+% Reader question: How do a shared-rail fault, one board losing interlock power,
+% and complete central eFuse cutoff differ?
+% Controlling sources: ADR-005 and ADR-001.
+% Status: Derived, non-normative explanation.
+% Required concepts: direct OK trip for shared rail; hardware power-loss reporting for isolated
+% V_INTERLOCK_LOCAL loss; complete power removal is safe without OK/telemetry.
+% Avoid implying: exact thresholds, hold-up circuit, diagnostic persistence, or
+% that the interlock normally commands the central eFuse.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=8mm and 12mm]
+  \node[noirlab block,text width=42mm,minimum height=14mm] (shared) {Common utility rail becomes invalid};
+  \node[noirlab block,right=of shared,text width=42mm,minimum height=14mm] (local) {One board loses \texttt{V\_INTERLOCK\_LOCAL}};
+  \node[noirlab block,right=of local,text width=42mm,minimum height=14mm] (central) {Central eFuse disconnects protected \texttt{+12V}};
+
+  \node[noirlab block,below=of shared,text width=42mm,minimum height=17mm] (shared_detect) {Backplane qualified rail-health output pulls \texttt{OK} low};
+  \node[noirlab block,below=of local,text width=42mm,minimum height=17mm] (local_detect) {Hardware reports F6; local relay permission is removed};
+  \node[noirlab block,below=of central,text width=42mm,minimum height=17mm] (central_detect) {Complete downstream power tree turns off};
+
+  \node[noirlab function board,below=of shared_detect,text width=42mm,minimum height=17mm] (shared_result) {Fleet enters \texttt{ERROR}; boards remain powered for diagnosis};
+  \node[noirlab function board,below=of local_detect,text width=42mm,minimum height=17mm] (local_result) {Fleet enters \texttt{ERROR}; unaffected boards remain available};
+  \node[noirlab function board,below=of central_detect,text width=42mm,minimum height=17mm] (central_result) {All powered outputs and normally-open relays de-energize};
+
+  \draw[noirlab safety flow] (shared) -- (shared_detect);
+  \draw[noirlab safety flow] (shared_detect) -- (shared_result);
+  \draw[noirlab safety flow] (local) -- (local_detect);
+  \draw[noirlab safety flow] (local_detect) -- (local_result);
+  \draw[noirlab power flow] (central) -- (central_detect);
+  \draw[noirlab power flow] (central_detect) -- (central_result);
+
+  \node[font=\scriptsize,align=center,below=6mm of shared_result] {Shared interlock remains powered};
+  \node[font=\scriptsize,align=center,below=6mm of local_result] {Affected-board telemetry may be limited};
+  \node[font=\scriptsize,align=center,below=6mm of central_result] {Continued \texttt{OK} and telemetry are not required};
+\end{tikzpicture}
+\end{document}

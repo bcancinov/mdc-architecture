@@ -1,0 +1,23 @@
+% Controlling sources: ADR-001 R7; ADR-003 maintenance reference.
+% Derived timing sketch; no fixed time scale or mandatory command protocol.
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+\begin{document}
+\begin{tikzpicture}[x=1cm,y=1cm,font=\sffamily\small]
+\node[anchor=west,font=\bfseries] at (0,1) {Safely disarmed throughout};
+\node[anchor=east] at (-0.2,0) {\texttt{EN=0}};
+\draw[very thick] (0,0)--(11,0);
+\node[anchor=east,align=right] at (-0.2,-1.5) {Selected test\\assertion};
+\draw[very thick] (0,-1.8)--(3,-1.8)--(3,-1.1)--(7,-1.1)--(7,-1.8)--(11,-1.8);
+\node[anchor=east,align=right] at (-0.2,-3.3) {Observable\\\texttt{OK}};
+\draw[very thick,draw=NOIRLabAlertRed] (0,-3)--(3.5,-3)--(3.5,-3.7)--(8,-3.7)--(8,-3)--(11,-3);
+\node[above,font=\scriptsize] at (1.4,-3) {HIGH baseline};
+\node[below,font=\scriptsize] at (5.5,-3.7) {LOW observed};
+\node[above,font=\scriptsize] at (9.5,-3) {HIGH restored};
+\node[anchor=east,align=right] at (-0.2,-5.2) {Masked\\\texttt{OK}};
+\draw[very thick] (0,-5.5)--(11,-5.5);
+\node[above,align=center] at (5.5,-5.5) {Already LOW from another source: inconclusive};
+\draw[->] (0,-6.5)--(11,-6.5) node[right] {Time};
+\node[below,align=center,text width=12cm,font=\scriptsize] at (5.5,-6.7) {Schematic timing only. Assertion delay and release/recovery behavior are ICD-defined.\\Do not bypass real faults. Restore an observable baseline before the next contribution test.};
+\end{tikzpicture}
+\end{document}

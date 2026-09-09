@@ -1,0 +1,39 @@
+% Figure ID: clock-loss-sequence
+% Reader question: What happens from distributed clock loss through diagnosis and recovery?
+% Controlling sources: ADR-001, ADR-003, and ADR-004.
+% Status: Derived, non-normative explanation.
+% Required concepts: independent activity monitor; immediate OK trip; hardware
+% safe response; watchdog refresh remains local; retained evidence; explicit requalification.
+% Avoid implying: exact timeout ordering, one fault location, exact messages, or
+% automatic restart when the clock returns.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[x=1mm,y=1mm]
+  \node[noirlab main board,minimum width=34mm] (main) at (0,0) {Main timing source};
+  \node[noirlab function board,minimum width=42mm] (board) at (56,0) {Affected function board};
+  \node[noirlab block,minimum width=34mm] (fleet) at (116,0) {Shared fleet};
+  \node[noirlab block,minimum width=34mm] (host) at (168,0) {Remote host};
+
+  \foreach \actor in {main,board,fleet,host}
+    \draw[draw=NOIRLabGrey,dashed] (\actor.south) -- ++(0,-107);
+
+  \draw[noirlab timing flow] (0,-15) -- node[above,font=\scriptsize] {100 MHz \texttt{CLOCK} during acquisition} (56,-15);
+  \node[font=\scriptsize,text=NOIRLabAlertRed] at (27,-28) {clock path becomes invalid};
+  \draw[NOIRLabAlertRed,very thick] (0,-25)--(54,-25);
+  \draw[NOIRLabAlertRed,very thick] (22,-21)--(32,-31);
+  \draw[NOIRLabAlertRed,very thick] (22,-31)--(32,-21);
+
+  \node[font=\scriptsize,align=center] at (56,-40) {independent local monitor\\records clock loss};
+  \draw[noirlab safety flow] (56,-51) -- node[above,font=\scriptsize] {pulls \texttt{OK} low} (116,-51);
+  \node[font=\scriptsize,align=center] at (116,-61) {hardware permission removed;\\boards enter safe error state};
+  \node[font=\scriptsize,align=center] at (56,-72) {healthy processing continues\\local watchdog refresh};
+  \draw[noirlab data flow] (168,-83) -- node[above,font=\scriptsize] {read retained evidence} (56,-83);
+  \node[font=\scriptsize,align=center] at (28,-94) {repair or restore clock path};
+  \draw[noirlab data flow] (168,-104) -- node[above,font=\scriptsize] {explicit clear and requalification} (56,-104);
+  \draw[noirlab data flow] (56,-115) -- node[above,font=\scriptsize] {return to \texttt{IDLE}; later re-arm} (116,-115);
+\end{tikzpicture}
+\end{document}

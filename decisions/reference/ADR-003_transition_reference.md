@@ -30,7 +30,7 @@ This file illustrates one detailed interpretation of [ADR-003](../ADR-003_state_
 
 - Main consumes system coordination commands such as arm, disarm, clear, and acquisition trigger requests.
 - Function boards respond to `EN`, `CLEAR`, `CLOCK`, and `SYNC` and expose their own configuration and diagnostic commands.
-- Maintenance verification may command one selected board to assert its `OK` or watchdog path only while the system is safely disarmed or already latched safe.
+- Maintenance verification may command one selected board to assert its `OK` or watchdog path only while the system is safely disarmed, with an observable HIGH-to-LOW transition as required by ADR-001 R7.
 - Operational writes and sequencer transfer occur only while safely disarmed.
 
 Exact command strings, legal-state tables, acknowledgement behavior, and cleanup actions are communication/firmware specification material.
@@ -38,3 +38,12 @@ Exact command strings, legal-state tables, acknowledgement behavior, and cleanup
 ## Example fault-evidence behavior
 
 A practical implementation commonly retains per-source diagnostic evidence and a separate local trip summary. During explicit recovery it rechecks live detectors before releasing its `OK` contribution. That organization is useful but not mandatory: another internal structure is compliant when it preserves the ADR-003 external behavior and diagnostic availability.
+
+## Example maintenance verification sequence
+
+1. Establish safely disarmed conditions (`EN=0`) with hazardous outputs inhibited.
+2. Establish that `OK` is HIGH before testing the selected contribution.
+3. Assert that contribution and verify the transition to LOW within the ICD-defined acceptance time.
+4. Release the test contribution using the defined safe test/recovery behavior and establish a HIGH baseline before testing another contribution.
+
+An active fault that masks the tested contribution makes the test inconclusive, not passed; protection is not bypassed to obtain a baseline. Release of a test contribution does not necessarily require full system recovery, but real fault retention and recovery follow ADR-003. Exercising one contribution does not validate every independent watchdog or supervisor path. Exact commands, timing, and result reporting belong to the ICD and maintenance plan.

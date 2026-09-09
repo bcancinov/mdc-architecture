@@ -1,0 +1,34 @@
+% Figure ID: decision-ownership
+% Reader question: Which document owns each level of decision and evidence?
+% Controlling source: repository README document hierarchy.
+% Status: Derived, non-normative explanation.
+% Required concepts: ADR, ICD, design specification, integration evidence;
+% handbook as explanatory rather than normative.
+% Avoid implying: a strictly one-way process; the handbook owns requirements;
+% all details belong in an ADR.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=8mm and 12mm]
+  \node[noirlab main board,minimum width=36mm] (adr) {ADR\\cross-system rule};
+  \node[noirlab block,right=of adr,minimum width=36mm] (icd) {ICD\\boundary and values};
+  \node[noirlab block,right=of icd,minimum width=39mm] (design) {Design specification\\internal solution};
+  \node[noirlab block,right=of design,minimum width=39mm] (evidence) {Integration evidence\\supported system};
+
+  \draw[noirlab data flow] (adr) -- node[above,font=\scriptsize] {constrains} (icd);
+  \draw[noirlab data flow] (icd) -- node[above,font=\scriptsize] {is implemented by} (design);
+  \draw[noirlab data flow] (design) -- node[above,font=\scriptsize] {is demonstrated by} (evidence);
+
+  \draw[noirlab data flow,dashed,<-] ($(adr.south)+(0,-3mm)$) to[bend right=22]
+    node[below,font=\scriptsize,align=center] {evidence can expose a design problem or the need\\for an explicit architecture change}
+    ($(evidence.south)+(0,-3mm)$);
+
+  \node[noirlab function board,below=21mm of icd,minimum width=64mm] (handbook) {Architecture handbook\\derived explanation for the reader};
+  \draw[noirlab data flow,dashed] (adr.south) -- (handbook.north west);
+  \draw[noirlab data flow,dashed] (icd.south) -- (handbook.north);
+  \node[font=\scriptsize,align=center,right=7mm of handbook] {The handbook does not\\become another source of truth.};
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,17 @@
+# Normalize line endings so the project builds identically on Windows and Unix.
+* text=auto
+
+# These are executed rather than typeset. CRLF breaks the shebang on Unix, so
+# they stay LF even when checked out on Windows.
+*.sh text eol=lf
+latexmkrc text eol=lf
+Makefile text eol=lf
+
+*.tex text
+*.sty text
+*.bib text
+*.md text
+*.svg text
+
+*.pdf binary
+*.png binary

@@ -1,0 +1,59 @@
+\documentclass{scrreprt}
+
+\makeatletter
+\def\input@path{{latex/}{handbook/}{handbook/frontmatter/}{handbook/chapters/}{handbook/appendices/}}
+\makeatother
+
+\input{metadata.tex}
+\usepackage{architecture}
+\addbibresource{references.bib}
+
+\hypersetup{
+  pdftitle={\NOIRLabDocumentTitle},
+  pdfauthor={\NOIRLabAuthors},
+  pdfsubject={Derived, non-normative detector-controller architecture handbook},
+  pdfkeywords={detector controller, architecture, NOIRLab}
+}
+
+\ConfigureNOIRLabPageStyle
+
+\begin{document}
+
+\hypersetup{pageanchor=false}
+\input{title_page}
+\hypersetup{pageanchor=true}
+
+\pagenumbering{roman}
+\input{document_control}
+\input{abstract}
+
+\tableofcontents
+\clearpage
+
+\pagenumbering{arabic}
+
+\part{Context and Overview}
+\input{01_origins_and_guiding_ideas}
+\input{02_system_at_a_glance}
+
+\part{Architecture}
+\input{03_modular_system_structure}
+\input{04_power_supervision_noise}
+\input{05_hardware_safety_interlock}
+\input{06_operating_lifecycle}
+\input{07_timing_synchronization}
+\input{08_identity_communication_data}
+
+\part{Applying the Architecture}
+\input{09_operating_fault_scenarios}
+
+\appendix
+\part{Reference Appendices}
+\input{a_glossary}
+\input{b_traceability}
+\input{c_shared_signals}
+\input{d_power_rails}
+\input{e_project_references}
+\input{f_revision_source}
+
+\end{document}

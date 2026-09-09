@@ -1,0 +1,46 @@
+% Figure ID: fault-convergence
+% Reader question: How do different faults reach the same fleet-wide safe response?
+% Controlling sources: ADR-001, ADR-003, ADR-004, and ADR-005.
+% Status: Derived, non-normative explanation.
+% Required concepts: independent detection paths; shared OK convergence; safe
+% response on every function board; total system-power cutoff is separately safe.
+% Avoid implying: OK identifies the source; software diagnosis is required before
+% safe action; every local converter requires its own monitor.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=5mm and 12mm]
+  \node[noirlab block] (physical) {Physical disconnect\\or missing slot path};
+  \node[noirlab block,below=of physical] (rail) {Invalid shared\\power rail};
+  \node[noirlab block,below=of rail] (digital) {Processor/FPGA\\power or reset loss};
+  \node[noirlab block,below=of digital] (freeze) {Frozen logic or\\failed pet path};
+  \node[noirlab block,below=of freeze] (clock) {Distributed\\clock loss};
+  \node[noirlab block,below=of clock] (interlock) {Local interlock-\\power loss};
+  \node[noirlab block,below=of interlock] (localfault) {Other monitored\\local hazard};
+  \node[noirlab block,below=of localfault] (host) {Armed host-\\supervision timeout};
+
+  \node[noirlab main board,right=18mm of physical] (loop) {Main converts\\loop break};
+  \node[noirlab block,right=18mm of rail] (railhealth) {Backplane qualified\\rail health};
+  \node[noirlab block,right=18mm of digital] (failsafe) {Interlock-powered\\fail-safe path};
+  \node[noirlab block,right=18mm of freeze] (watchdog) {Independent hardware\\watchdog};
+  \node[noirlab block,right=18mm of clock] (clockmonitor) {Independent-clock\\activity monitor};
+  \node[noirlab block,right=18mm of interlock] (supervisor) {Hardware power-loss\\reporting};
+  \node[noirlab block,right=18mm of localfault] (localtrip) {Board-local\\fault path};
+  \node[noirlab block,right=18mm of host] (hosttrip) {Board-local\\supervision timer};
+
+  \node[noirlab block,right=26mm of clockmonitor,draw=black,very thick,minimum height=25mm] (ok) {Shared open-drain\\\texttt{OK} bus};
+  \node[noirlab function board,right=of ok,minimum height=25mm] (response) {Every function board:\\hardware permission removed,\\safe state entered};
+
+  \foreach \a/\b in {physical/loop,rail/railhealth,digital/failsafe,freeze/watchdog,clock/clockmonitor,interlock/supervisor,localfault/localtrip,host/hosttrip}
+    \draw[noirlab data flow] (\a) -- (\b);
+  \foreach \b in {loop,railhealth,failsafe,watchdog,clockmonitor,supervisor,localtrip,hosttrip}
+    \draw[noirlab safety flow] (\b.east) -- (ok.west);
+  \draw[noirlab safety flow] (ok) -- (response);
+
+  \node[noirlab block,below=10mm of hosttrip,draw=NOIRLabAlertRed] (cutoff) {Central eFuse removes\\complete system power};
+  \draw[noirlab power flow] (cutoff.east) -| node[pos=0.25,below,font=\scriptsize] {separate safe path} (response.south);
+\end{tikzpicture}
+\end{document}

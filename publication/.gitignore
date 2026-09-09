@@ -1,0 +1,13 @@
+build/
+
+# figures/generated/ holds the figure PDFs the document includes. They are
+# committed, so a fresh checkout builds with latexmk alone. Rebuild them only
+# after editing a figure source; see the README. The auxiliary files that
+# latexmk leaves beside them are not committed.
+figures/generated/*
+!figures/generated/*.pdf
+!figures/generated/README.md
+
+# handbook/generated/ is committed for the same reason. It is derived from the
+# ADRs, but committing it keeps the document buildable with latexmk alone, from
+# a fresh checkout and on Overleaf, without make, shell scripts, or awk.

@@ -1,0 +1,50 @@
+% Figure ID: communication-ownership
+% Reader question: How does the host communicate with and identify independent boards?
+% Controlling sources: ADR-002 and ADR-006.
+% Status: Derived, non-normative explanation.
+% Required concepts: direct Ethernet endpoints; host-owned inventory; no main
+% proxy; direct video data; local UART recovery and persistent identity.
+% Avoid implying: one switch topology; exact protocols or link rates; a shared
+% UART bus; physical slot position is operational identity.
+
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage{noirlab-document}
+
+
+\begin{document}
+\begin{tikzpicture}[node distance=9mm and 20mm]
+  % The endpoints are placed first; the network and the service interface are
+  % then centred on that row, so the shared connections run straight.
+  \node[noirlab main board] (main) {Main board\\endpoint};
+  \node[noirlab function board,right=of main] (video) {Video board\\endpoint};
+  \node[noirlab function board,right=of video] (other) {Other function-board\\endpoint};
+  \node[noirlab function board,right=of other] (bridge) {Bridge-board\\endpoint};
+  \node[fit=(main)(bridge),inner sep=0pt] (endpoints) {};
+
+  \node[noirlab block,above=22mm of endpoints,minimum width=140mm] (network) {Trusted instrument Ethernet network};
+  \node[noirlab block,above=9mm of network,minimum width=47mm] (host) {Remote host\\authoritative logical-role inventory};
+
+  \draw[noirlab data flow,<->] (host) -- node[right,font=\scriptsize] {control, status, supervision, and data} (network);
+
+  % One trunk from the network to a distribution rail, then a stub to each
+  % endpoint: a single 1-to-N connection rather than four parallel diagonals.
+  \coordinate (rail) at ([yshift=11mm]endpoints.north);
+  \draw[noirlab data flow,<->] (network.south) -- (network.south |- rail);
+  % The rail carries no arrowhead: it is the shared segment, not a direction.
+  \draw[noirlab data flow,-] (main.north |- rail) -- (bridge.north |- rail);
+  \foreach \board in {main,other,bridge}
+    \draw[noirlab data flow,<->] (\board.north |- rail) -- (\board.north);
+  \draw[noirlab data flow,<->,very thick] (video.north |- rail) -- (video.north);
+  \node[font=\scriptsize,align=right,fill=white,inner sep=1pt,anchor=east]
+    at ([xshift=-2mm,yshift=-5.5mm]video.north |- rail)
+    {direct science-data\\path to the host};
+
+  % Square routing here too, but deliberately as separate parallel drops. A
+  % shared rail would read as the backplane bus this interface is not.
+  \node[noirlab block,below=13mm of endpoints,minimum width=178mm] (service) {Each active board has its own physically accessible UART service interface\\for persistent identity, bootstrap-network settings, factory data, and recovery};
+  \foreach \board in {main,video,other,bridge}
+    \draw[noirlab data flow,dashed] (\board.south) -- (\board.south |- service.north);
+
+  \node[font=\scriptsize,align=center,below=6mm of service] {The UART paths are separate local service connections, not a shared backplane bus.\\Main does not proxy ordinary function-board traffic.};
+\end{tikzpicture}
+\end{document}

@@ -1,0 +1,27 @@
+% Single maintained source for publication-control metadata.
+% Architectural facts do not belong in this file.
+
+\newif\ifNOIRLabRelease
+\NOIRLabReleasefalse
+
+\newcommand{\NOIRLabDocumentTitle}{Modular Detector Controller Architecture}
+\newcommand{\NOIRLabDocumentShortTitle}{Detector Controller Architecture}
+\newcommand{\NOIRLabDocumentType}{Architecture Handbook}
+\newcommand{\NOIRLabReferenceCode}{Pending}
+\newcommand{\NOIRLabAuthors}{Braulio Cancino Vera}
+\newcommand{\NOIRLabReviewers}{}
+\newcommand{\NOIRLabDocumentOwner}{Pending}
+\newcommand{\NOIRLabVersion}{0.2}
+\newcommand{\NOIRLabReleaseDate}{Not released}
+\newcommand{\NOIRLabStatus}{Working version}
+\newcommand{\NOIRLabEffectiveDate}{Not applicable}
+\newcommand{\NOIRLabDistribution}{Public}
+\newcommand{\NOIRLabGenerationDate}{\today}
+\newcommand{\NOIRLabFooterText}{Derived, non-normative}
+\newcommand{\NOIRLabTitlePageNote}{This handbook is derived and non-normative; resolved Architecture Decision Records control.}
+
+% Formal approvals are entered deliberately for a controlled release.
+% They are never inferred from repository history.
+\newcommand{\NOIRLabApprovalRecord}{Reviewers and formal approvals will be added when applicable.}
+\newcommand{\NOIRLabRevisionDate}{2026-09-09}
+\newcommand{\NOIRLabChangeSummary}{Passive or active continuity with a common electrical interface, F6 coverage, and optional direct local response to LOOP LOW; optional interlock-supply supervisor with required relay disable and F6 reporting; safety CPLD and watchdog options; optional use of standard analog rails and local conversion; shared-rail conditioning including protected +12 V and digital loads; application-specific Ethernet and ADC rates; evidence-based diagnostics and conclusive maintenance verification; updated explanatory diagrams; clearer operating actions and reorganized explanations; synchronized concept guide, example function board, build instructions, and clearer detector interface terminology; explicit optional input eFuses for main and function boards; armed host-supervision rationale and pre-arm configuration verification; consolidated management-clocking explanation and aligned operating scenarios; clearer clock-loss and watchdog evidence explanation, including disarmed protection; separate watchdog and clock-loss detection with optional refresh alignment and local fallback.}

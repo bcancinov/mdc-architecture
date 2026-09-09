@@ -1,0 +1,74 @@
+\chapter{Origins and Guiding Ideas}
+\label{chap:origins}
+% Traceability: ADR-001 ADR-002 ADR-003 ADR-004 ADR-005 ADR-006
+
+Astronomical instruments often operate for decades. Their detector controllers must remain useful through several generations of processors, data links, design tools, and electronic components.
+
+A detector controller also has a critical role. It creates detector clocks and bias voltages, reads small video signals, and sends science data to the host. A controller failure can stop an instrument or place a valuable detector at risk.
+
+The problem is therefore larger than replacing one obsolete part. A controller can become difficult to support because spare parts are gone, the original vendor no longer supports it, its host interface is outdated, its design files are unavailable, or only a few people know how it works. Replacing one weak part without improving the architecture may only move the problem to another part of the system.
+
+This project addresses that long-term support problem with a modular detector-controller architecture. The project has already been approved. This chapter explains the ideas behind the architecture rather than repeating the project proposal or business case.
+
+\section{From a Local Need to a General Architecture}
+
+The project began with NOIRLab's need to support many detector controllers in long-lived instruments. An internal review found controllers of different ages, with different levels of vendor support, available spares, and local expertise. One important commercial controller family had lost vendor support. Existing in-house controllers were also affected by obsolete components and host interfaces. The detailed inventory and its dated assessments remain in the official project documents.
+
+These problems are not unique to NOIRLab. Scientific instruments often remain in service much longer than commercial electronics. Detector systems are also built in small quantities, so a permanent commercial supply is unlikely. New detectors may need more channels or different combinations of video, clock, and bias functions. A direct replacement for one old controller would solve an immediate problem, but it would not provide a clear path for future instruments.
+
+NOIRLab is the origin and first user of the project, but the architecture is intended to be open and useful to a wider detector-engineering community. It does not assume that one circuit can serve every detector. Instead, it defines common board roles and interfaces while allowing detector-specific electronics to remain specialized. The Phase II mandate moved the project from early concepts toward a controlled architecture, defined interfaces, and prototype testing.
+
+\section{Guiding Ideas}
+
+\subsection{Plan for replacement}
+
+No electronic component will remain available forever. Long service life must therefore come from the ability to replace parts of the system without redesigning everything.
+
+The architecture divides the controller into boards with clear roles and interfaces. A processor module, converter, or network device may change as technology changes. The replacement must still meet the same interface and system requirements. Open design files, test results, and recorded decisions allow future teams to understand and update the system.
+
+This is what vendor independence means here. The controller still uses commercial parts. However, the instrument is not permanently tied to one supplier's private system architecture.
+
+\subsection{Share common functions and specialize detector electronics}
+
+Detectors do not all need the same analog circuits, voltages, timing patterns, or data rates. A single circuit designed to cover every case would become large and difficult to maintain.
+
+The platform instead shares functions that are useful across many systems. These include board roles, power distribution, safety coordination, timing distribution, identity, service access, and network communication. Function boards provide the detector-specific video, clock, and bias circuits.
+
+A board does not need to use every shared resource. It only needs to follow the common interfaces that apply to its role. This allows one detector interface to change without forcing unrelated boards to change with it.
+
+\subsection{Scale by adding modules}
+
+The architecture does not define one permanent controller size. More function boards, backplanes, or network capacity can be added when an instrument needs them. The main board coordinates the system, but it does not collect all science data or execute every detector function. This avoids making it the main data bottleneck.
+
+Adding modules does not guarantee that every system size will work. Each instrument must still check its power, connectors, cooling, mechanics, network capacity, and timing. The architecture provides a consistent way to expand; it does not promise unlimited capacity.
+
+\subsection{Make safety and predictable behavior system properties}
+
+Safety must not depend only on host software or on one running processor. When hardware detects a safety-related fault, it drives the system to a safe condition. Software can then report and diagnose the cause. Shared interlocks, safe default outputs, local protection, and controlled recovery apply this rule across different function boards. ADR-001 and ADR-003 define this behavior.
+
+The system must also behave in a predictable way. Timing-sensitive operations use controlled clock relationships. Management and protection continue to work if the acquisition clock is lost. Power conversion and input filtering are arranged so that switching noise can be measured and included in the system noise budget. The goal is not zero noise or zero timing error. The goal is behavior that engineers can analyze and test.
+
+\subsection{Separate architecture from implementation}
+
+The project uses different documents for different levels of detail. Architecture Decision Records define behavior and responsibilities that affect several boards. Interface Control Documents define the signals, messages, limits, timing values, and connector assignments at each boundary. Board specifications define how hardware, firmware, and software implement those interfaces.
+
+This separation allows implementations to change without changing the architecture. It also prevents this handbook from becoming a second technical specification. If this handbook simplifies a mechanism, the resolved ADR remains authoritative.
+
+\section{Why This Approach Is Practical Now}
+
+Building a modular controller is more practical and cost-effective now than it was decades ago. Integrated processor and FPGA modules can provide software control, deterministic logic, memory, and standard networking in a compact form. Ethernet allows active boards to communicate directly with the host, without a proprietary host-interface card. Modern converters, data converters, timing devices, and protection components reduce the amount of custom support circuitry.
+
+The design process has also improved. Multilayer PCB fabrication and assembly are more accessible. Modern design and simulation tools help teams develop complex boards. Version control, automated builds, and open collaboration help preserve both the design and the reasons behind it. These tools reduce development effort and improve reproducibility. They do not remove the need for careful analog design, timing analysis, safety analysis, and system testing.
+
+The architecture therefore defines required capabilities, not preferred product families. It does not require a particular processor module, FPGA family, converter line, or design-tool brand.
+
+\section{Scope of This Handbook}
+
+The following chapters explain the controller from its external power, timing, and host connections to its detector-facing clock, bias, control, and video interfaces. They describe board roles, power and supervision, hardware safety, operating states, timing, identity, communication, science data, fault behavior, and system integration.
+
+The handbook does not define connector pinouts, communication protocols, component-level circuits, FPGA implementations, or operating procedures. Those details belong in instrument requirements, ICDs, board specifications, and verification records.
+
+Chapter~\ref{chap:overview} gives a short view of the complete system. Later chapters then explain each part in more detail.
+
+\medskip
+\noindent\textit{Chapter sources:} NOIRLab project report, Phase II mandate, and architecture overview \autocite{noirlab-project-report-2025,noirlab-mandate-2025,noirlab-architecture-overview-2026}. Current technical decisions are recorded in ADR-001 through ADR-006.
